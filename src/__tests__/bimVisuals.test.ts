@@ -143,8 +143,8 @@ describe('systemPrompts', () => {
     expect(SITE_PLAN_PROMPT).toContain('3m')
   })
 
-  it('FLOOR_PLAN_PROMPT requests room areas in m²', () => {
-    expect(FLOOR_PLAN_PROMPT).toContain('m²')
+  it('FLOOR_PLAN_PROMPT requests room areas', () => {
+    expect(FLOOR_PLAN_PROMPT).toContain('m2')
     expect(FLOOR_PLAN_PROMPT).toContain('1:100')
   })
 })
