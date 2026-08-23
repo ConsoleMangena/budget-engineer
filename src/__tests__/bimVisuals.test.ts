@@ -139,8 +139,9 @@ describe('systemPrompts', () => {
   })
 
   it('SITE_PLAN_PROMPT references Zimbabwe setback distances', () => {
-    expect(SITE_PLAN_PROMPT).toContain('6m')
     expect(SITE_PLAN_PROMPT).toContain('3m')
+    expect(SITE_PLAN_PROMPT).toContain('2m')
+    expect(SITE_PLAN_PROMPT).toContain('1.5m')
   })
 
   it('FLOOR_PLAN_PROMPT requests room areas', () => {

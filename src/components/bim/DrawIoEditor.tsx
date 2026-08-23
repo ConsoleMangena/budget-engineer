@@ -13,18 +13,30 @@ import {
   AlertTriangle,
   Maximize2,
   Minimize2,
+  RotateCcw,
 } from 'lucide-react';
 import {
   sendDrawioMessage,
   fileValidation,
   type DrawioMessage,
 } from '@/engine/bim/drawioChat';
-import { SITE_PLAN_PROMPT, FLOOR_PLAN_PROMPT, COUNCIL_SUBMISSION_PROMPT } from '@/engine/bim/drawioSystemPrompts';
+import {
+  SITE_PLAN_PROMPT,
+  FLOOR_PLAN_PROMPT,
+  COUNCIL_SUBMISSION_PROMPT,
+} from '@/engine/bim/drawioSystemPrompts';
 
 export interface DrawIoEditorProps {
   initialXml?: string;
   onXmlChange?: (xml: string) => void;
   height?: number;
+}
+
+interface HistorySnapshot {
+  id: number;
+  timestamp: number;
+  xml: string;
+  label: string;
 }
 
 const PRESET_PROMPTS = [
@@ -37,7 +49,10 @@ const TOOL_LABELS: Record<string, string> = {
   display_diagram: 'New Diagram',
   edit_diagram: 'Edit',
   append_diagram: 'Append',
+  get_shape_library: 'Shapes',
 };
+
+type ThemeMode = 'dark' | 'light' | 'sketch';
 
 export function DrawIoEditor({
   initialXml = '',
@@ -50,8 +65,10 @@ export function DrawIoEditor({
   const [xml, setXml] = useState<string | null>(initialXml || null);
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [darkMode, setDarkMode] = useState(true);
+  const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [history, setHistory] = useState<HistorySnapshot[]>([]);
+  const [nextId, setNextId] = useState(1);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const drawioRef = useRef<DrawIoEmbedRef>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -60,11 +77,27 @@ export function DrawIoEditor({
     messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
   }, [messages]);
 
-  useEffect(() => {
-    if (initialXml && !xml) {
-      setXml(initialXml);
-    }
-  }, [initialXml]);
+  const pushHistory = useCallback(
+    (xmlContent: string, label: string) => {
+      if (!xmlContent) return;
+      setHistory((prev) => [
+        ...prev,
+        { id: nextId, timestamp: Date.now(), xml: xmlContent, label },
+      ]);
+      setNextId((n) => n + 1);
+    },
+    [nextId],
+  );
+
+  const restoreHistory = useCallback(
+    (snapshot: HistorySnapshot) => {
+      setXml(snapshot.xml);
+      onXmlChange?.(snapshot.xml);
+      drawioRef.current?.load({ xml: snapshot.xml });
+      setShowHistory(false);
+    },
+    [onXmlChange],
+  );
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -73,9 +106,12 @@ export function DrawIoEditor({
     setInput('');
     setError(null);
     const userMsg: DrawioMessage = { role: 'user', content: text };
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
+    setMessages((prev) => [...prev, userMsg]);
     setIsGenerating(true);
+
+    if (xml) {
+      pushHistory(xml, `Before: ${text.slice(0, 40)}`);
+    }
 
     try {
       const result = await sendDrawioMessage(text, messages, xml);
@@ -91,7 +127,7 @@ export function DrawIoEditor({
     } finally {
       setIsGenerating(false);
     }
-  }, [input, messages, xml, isGenerating, onXmlChange]);
+  }, [input, messages, xml, isGenerating, onXmlChange, pushHistory]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -105,6 +141,12 @@ export function DrawIoEditor({
 
   const handlePreset = useCallback((preset: string) => {
     setInput(preset);
+  }, []);
+
+  const cycleTheme = useCallback(() => {
+    setThemeMode((prev) =>
+      prev === 'dark' ? 'light' : prev === 'light' ? 'sketch' : 'dark',
+    );
   }, []);
 
   const handleFileUpload = useCallback(
@@ -122,16 +164,33 @@ export function DrawIoEditor({
         const text = await file.text();
         const ext = file.name.split('.').pop()?.toLowerCase();
         if (ext === 'drawio' || ext === 'xml') {
+          pushHistory(xml ?? '', `Before upload: ${file.name}`);
           setXml(text);
           onXmlChange?.(text);
           drawioRef.current?.load({ xml: text });
+        } else if (ext === 'svg') {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: `Uploaded ${file.name}. I can see this SVG file. Would you like me to recreate it as a draw.io diagram with editable elements?`,
+            },
+          ]);
+        } else if (ext === 'png' || ext === 'pdf') {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: `Uploaded ${file.name}. I can analyze this image. Describe what diagram you would like me to create based on it, and I will generate the draw.io XML.`,
+            },
+          ]);
         }
       } catch {
         setError('Failed to read file');
       }
       e.target.value = '';
     },
-    [onXmlChange],
+    [onXmlChange, xml, pushHistory],
   );
 
   const handleExportXml = useCallback(() => {
@@ -149,6 +208,7 @@ export function DrawIoEditor({
     setMessages([]);
     setXml(null);
     setError(null);
+    setHistory([]);
     onXmlChange?.('');
   }, [onXmlChange]);
 
@@ -161,6 +221,14 @@ export function DrawIoEditor({
     },
     [onXmlChange],
   );
+
+  const darkMode = themeMode === 'dark' || themeMode === 'sketch';
+
+  const THEME_LABELS: Record<ThemeMode, string> = {
+    dark: 'Dark',
+    light: 'Light',
+    sketch: 'Sketch',
+  };
 
   return (
     <div
@@ -190,9 +258,9 @@ export function DrawIoEditor({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setDarkMode(!darkMode)}
+            onClick={cycleTheme}
             className="h-8 w-8 p-0"
-            title="Toggle theme"
+            title={`Theme: ${THEME_LABELS[themeMode]}`}
           >
             <Palette className="h-4 w-4" />
           </Button>
@@ -240,7 +308,7 @@ export function DrawIoEditor({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".drawio,.xml,.svg,.png"
+          accept=".drawio,.xml,.svg,.png,.pdf"
           className="hidden"
           onChange={handleFileUpload}
         />
@@ -277,12 +345,12 @@ export function DrawIoEditor({
               autosave={true}
               onAutoSave={handleAutoSave}
               configuration={{
-                ui: darkMode ? 'dark' : 'kennedy',
+                ui: themeMode === 'sketch' ? 'sketch' : darkMode ? 'dark' : 'kennedy',
                 grid: true,
                 autosave: true,
               }}
               urlParameters={{
-                ui: darkMode ? 'dark' : 'kennedy',
+                ui: themeMode === 'sketch' ? 'sketch' : darkMode ? 'dark' : 'kennedy',
                 dark: darkMode,
                 spin: true,
                 grid: true,
@@ -308,6 +376,54 @@ export function DrawIoEditor({
           } ${showHistory ? '' : 'hidden lg:flex'}`}
           style={{ height: isFullscreen ? 'calc(100vh - 140px)' : height }}
         >
+          {/* History panel */}
+          {showHistory && (
+            <div className="border-b border-white/10 p-3 max-h-48 overflow-y-auto">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-[var(--text-primary)]">
+                  Diagram History
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowHistory(false)}
+                  className="h-6 w-6 p-0 text-xs"
+                >
+                  ×
+                </Button>
+              </div>
+              {history.length === 0 ? (
+                <p className="text-xs text-[var(--text-muted)] py-2">
+                  No snapshots yet
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {history
+                    .slice()
+                    .reverse()
+                    .map((snap) => (
+                      <button
+                        key={snap.id}
+                        onClick={() => restoreHistory(snap)}
+                        className="w-full text-left px-2 py-1.5 rounded text-xs hover:bg-white/5 flex items-center gap-2"
+                      >
+                        <RotateCcw className="h-3 w-3 text-[var(--brand-accent)] shrink-0" />
+                        <span className="text-[var(--text-secondary)] truncate">
+                          {snap.label}
+                        </span>
+                        <span className="text-[var(--text-muted)] ml-auto shrink-0">
+                          {new Date(snap.timestamp).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             {messages.length === 0 && (
@@ -332,12 +448,17 @@ export function DrawIoEditor({
                   <span className="font-medium text-[var(--text-primary)]">
                     {msg.role === 'user' ? 'You' : 'AI'}
                   </span>
-                  {msg.tool && (
+                  {msg.tool && msg.tool !== 'get_shape_library' && (
                     <span className="px-1.5 py-0.5 rounded bg-[var(--brand-accent)]/20 text-[var(--brand-accent)] text-[10px]">
                       {TOOL_LABELS[msg.tool] ?? msg.tool}
                     </span>
                   )}
                 </div>
+                {msg.reasoning && (
+                  <div className="mb-1.5 px-2 py-1 rounded bg-[var(--brand-accent)]/5 border border-[var(--brand-accent)]/10 text-[10px] text-[var(--text-muted)] italic">
+                    💭 {msg.reasoning}
+                  </div>
+                )}
                 <div className="text-[var(--text-secondary)] whitespace-pre-wrap break-words">
                   {msg.content.length > 500
                     ? msg.content.slice(0, 500) + '...'
