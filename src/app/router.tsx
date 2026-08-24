@@ -51,6 +51,7 @@ const BuilderDashboard = lazy(() => import('@/pages/ecosystem/BuilderDashboard')
 const ContractorDashboard = lazy(() => import('@/pages/ecosystem/ContractorDashboard'));
 const SupplierDashboard = lazy(() => import('@/pages/ecosystem/SupplierDashboard'));
 const BulkProcurementDashboard = lazy(() => import('@/pages/ecosystem/BulkProcurementDashboard'));
+const BimPage = lazy(() => import('@/pages/BimPage'));
 
 function SafeRoute({ children }: { children: React.ReactNode }) {
   return <ErrorBoundary><Suspense fallback={<PageLoader />}>{children}</Suspense></ErrorBoundary>;
@@ -249,6 +250,10 @@ const router = createBrowserRouter([
       {
         path: '/ecosystem',
         element: <SafeRoute><EcosystemLanding /></SafeRoute>,
+      },
+      {
+        path: '/bim',
+        element: <SafeRoute><BimPage /></SafeRoute>,
       },
       {
         path: '/ecosystem/builder',
