@@ -21,8 +21,14 @@ vi.mock('@/components/bim/DrawIoEditor', () => ({
 }))
 
 vi.mock('@/components/bim/DocsAndBimPackage', () => ({
-  DocsAndBimPackage: (props: { activePlan: unknown; selectedDesign: unknown }) => (
+  DocsAndBimPackage: (_props: { activePlan: unknown; selectedDesign: unknown }) => (
     <div data-testid="mock-docs-package">DocsAndBimPackage</div>
+  ),
+}))
+
+vi.mock('@/components/bim/ParametricPlanCanvas', () => ({
+  ParametricPlanCanvas: (props: { plan: unknown; buildingType?: string }) => (
+    <div data-testid="mock-parametric-plan" data-building={props.buildingType}>ParametricPlanCanvas</div>
   ),
 }))
 
@@ -101,9 +107,10 @@ describe('BimIntegrationDashboard', () => {
     expect(screen.getByText('BIM + Docs & BIM + Construction Intelligence')).toBeTruthy()
   })
 
-  it('renders all 5 tabs', () => {
+  it('renders all 6 tabs', () => {
     render(<BimIntegrationDashboard activePlan={null} selectedDesign={null} />)
     expect(screen.getByTestId('tab-overview')).toBeTruthy()
+    expect(screen.getByTestId('tab-parametric-plan')).toBeTruthy()
     expect(screen.getByTestId('tab-bim-3d')).toBeTruthy()
     expect(screen.getByTestId('tab-drawio')).toBeTruthy()
     expect(screen.getByTestId('tab-docs-package')).toBeTruthy()
@@ -197,6 +204,18 @@ describe('BimIntegrationDashboard', () => {
   })
 
   describe('tab switching', () => {
+    it('switches to Parametric Plan tab and shows canvas when plan provided', () => {
+      render(<BimIntegrationDashboard activePlan={MOCK_PLAN} selectedDesign={MOCK_DESIGN} />)
+      fireEvent.click(screen.getByTestId('tab-parametric-plan'))
+      expect(screen.getByTestId('mock-parametric-plan')).toBeTruthy()
+    })
+
+    it('shows empty state on Parametric Plan tab when no plan', () => {
+      render(<BimIntegrationDashboard activePlan={null} selectedDesign={null} />)
+      fireEvent.click(screen.getByTestId('tab-parametric-plan'))
+      expect(screen.getByText('No active plan')).toBeTruthy()
+    })
+
     it('switches to 3D Model tab and shows PascalViewer', () => {
       render(<BimIntegrationDashboard activePlan={MOCK_PLAN} selectedDesign={MOCK_DESIGN} />)
       fireEvent.click(screen.getByTestId('tab-bim-3d'))
@@ -288,6 +307,7 @@ describe('BimIntegrationDashboard', () => {
     it('renders on overview tab', () => {
       render(<BimIntegrationDashboard activePlan={null} selectedDesign={null} />)
       expect(screen.getByText('3D + Docs Integration')).toBeTruthy()
+      expect(screen.getAllByText('Parametric Plan').length).toBeGreaterThanOrEqual(1)
       expect(screen.getByText('Pascal Viewer')).toBeTruthy()
       expect(screen.getByText('Draw.io Editor')).toBeTruthy()
       expect(screen.getByText('18-Sheet Package')).toBeTruthy()

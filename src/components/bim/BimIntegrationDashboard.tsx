@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react'
 import {
   Box, LayoutGrid, Boxes, FileText, HardHat, Building2,
-  Wrench, ShieldCheck, Clock, DollarSign, Target,
+  Wrench, ShieldCheck, DollarSign, Target,
   CheckCircle2, AlertTriangle, TrendingUp, Layers,
-  ChevronRight, Ruler, Droplets, Flame, Truck,
+  Truck, PenTool,
 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { DzCard, DzPill, Kicker, BorderBeamCard } from '@/components/dzenhare'
@@ -11,6 +11,7 @@ import { PascalViewer } from './PascalViewer'
 import { DrawIoEditor } from './DrawIoEditor'
 import { DocsAndBimPackage } from './DocsAndBimPackage'
 import { ConstructionDetailsBrowser } from './ConstructionDetailsBrowser'
+import { ParametricPlanCanvas } from './ParametricPlanCanvas'
 import type { PlanModel } from '@/domain/plan'
 import type { DesignOption } from '@/domain/boq'
 import type { PipelineResult } from '@/engine/pipeline/generativeDesignPipeline'
@@ -31,6 +32,7 @@ export interface BimIntegrationDashboardProps {
 
 type DashboardTab =
   | 'overview'
+  | 'parametric-plan'
   | 'bim-3d'
   | 'drawio'
   | 'docs-package'
@@ -212,6 +214,7 @@ export function BimIntegrationDashboard({
       <div className="flex items-center gap-1 border-b border-[var(--border-default)] px-4 py-1.5 overflow-x-auto">
         {([
           { key: 'overview' as const, label: 'Overview', icon: Boxes },
+          { key: 'parametric-plan' as const, label: 'Parametric Plan', icon: PenTool },
           { key: 'bim-3d' as const, label: '3D Model', icon: Box },
           { key: 'drawio' as const, label: 'AI Draw.io', icon: LayoutGrid },
           { key: 'docs-package' as const, label: 'Docs Package', icon: FileText },
@@ -251,6 +254,10 @@ export function BimIntegrationDashboard({
                 <BorderBeamCard badge="BIM Fortress" title="3D + Docs Integration" description="Parametric model viewer, AI-powered draw.io editor, and 18-sheet SADC council package">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex items-center gap-2 rounded-lg bg-[var(--bg-tertiary)] p-2">
+                      <PenTool size={14} className="text-[var(--brand-accent)]" />
+                      <span className="text-[11px] text-[var(--text-secondary)]">Parametric Plan</span>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-lg bg-[var(--bg-tertiary)] p-2">
                       <Box size={14} className="text-[var(--brand-accent)]" />
                       <span className="text-[11px] text-[var(--text-secondary)]">Pascal Viewer</span>
                     </div>
@@ -286,6 +293,29 @@ export function BimIntegrationDashboard({
 
             {/* Construction phases */}
             <ConstructionPhasesSummary />
+          </motion.div>
+        )}
+
+        {tab === 'parametric-plan' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex flex-col gap-4"
+            data-testid="parametric-plan-view"
+          >
+            {activePlan ? (
+              <BorderBeamCard badge="Parametric Engine" title="2D Parametric Floor Plan" description="Dynamic SVG with zone-colouring, occupancy badges, structural grid, fire compartments, and dimension annotations">
+                <ParametricPlanCanvas plan={activePlan} buildingType={buildingType} />
+              </BorderBeamCard>
+            ) : (
+              <DzCard>
+                <div className="flex flex-col items-center justify-center p-12 text-center">
+                  <PenTool size={40} className="mb-4 text-stone-400" />
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">No active plan</h3>
+                  <p className="mt-1 text-xs text-stone-400">Generate or import a floor plan to view the parametric drawing.</p>
+                </div>
+              </DzCard>
+            )}
           </motion.div>
         )}
 
