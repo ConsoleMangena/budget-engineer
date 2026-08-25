@@ -406,6 +406,12 @@ describe('planModelToIfcStep — adjacency graph fallback', () => {
           { from: 'r1', to: 'r2', weight: 3 },
           { from: 'r1', to: 'r3', weight: 1 },
         ],
+        satisfiedWeight: 0,
+        totalWeight: 4,
+        score: 0,
+        satisfied: [],
+        violated: [],
+        edges: [],
       },
     })
     const ifc = planModelToIfcStep(plan, CTX)!

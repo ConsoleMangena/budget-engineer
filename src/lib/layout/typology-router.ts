@@ -3,6 +3,8 @@ import { generateApartmentLayout } from './typologies/non-residential'
 import { generateOfficeLayout } from './typologies/office-strategy'
 import { generateClinicLayout } from './typologies/clinic-strategy'
 import { generateHotelLayout } from './typologies/hotel-strategy'
+import { generateSchoolLayout } from './typologies/school-strategy'
+import { generateWarehouseLayout } from './typologies/warehouse-strategy'
 import { generateZonedLayout } from '../geometry/plan-intelligence'
 import { bubbleFromRooms } from '../../engine/spatial/topological-graph'
 import { templateForTypology, pickHouseTemplate } from './layout-templates'
@@ -67,10 +69,8 @@ const STRATEGIES: Record<string, TypologyStrategy> = {
   'school': {
     id: 'school',
     name: 'School',
-    generate: (program, width, height, seed) => {
-      const t = templateForTypology('school', width * height, seed)
-      const result = packTemplate(t, program, width, height, seed ?? 0)
-      return { rooms: result.rooms, warnings: result.warnings.map(w => w.message), valid: result.valid }
+    generate: (program, width, height, seed, floorContext) => {
+      return generateSchoolLayout(program, width, height, seed, floorContext)
     },
   },
   'hotel': {
@@ -188,12 +188,7 @@ const STRATEGIES: Record<string, TypologyStrategy> = {
     id: 'warehouse',
     name: 'Warehouse + Office',
     generate: (program, width, height, seed?, floorContext?) => {
-      if (floorContext && floorContext.floorRole === 'mezzanine-office') {
-        return { rooms: generateZonedLayout({ program, width, height, corridorWidth: 1.5 }) }
-      }
-      const t = templateForTypology('warehouse', width * height, seed)
-      const result = packTemplate(t, program, width, height, seed ?? 0)
-      return { rooms: result.rooms, warnings: result.warnings.map(w => w.message), valid: result.valid }
+      return generateWarehouseLayout(program, width, height, seed, floorContext)
     },
   },
   'petrol': {

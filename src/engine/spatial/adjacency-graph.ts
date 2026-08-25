@@ -290,3 +290,77 @@ export const HOTEL_ADJACENCY_RULES: AdjacencyRule[] = [
   { from: 'kitchen', to: 'corridor', weight: 1 },
   { from: 'lobby', to: 'restaurant', weight: 1 },
 ]
+
+export type SchoolRoomGroup =
+  | 'classroom'
+  | 'admin'
+  | 'library'
+  | 'store'
+  | 'wc'
+  | 'stair'
+  | 'lift'
+  | 'corridor'
+
+export const SCHOOL_ROOM_GROUPS: RoomGroupSpec[] = [
+  { group: 'classroom', patterns: ['classroom', 'lab', 'computer room', 'art room', 'music room'] },
+  { group: 'admin', patterns: ['staff room', "head's office", 'head office', 'admin office', 'office', 'administrative'] },
+  { group: 'library', patterns: ['library', 'resource centre', 'resource center', 'media centre', 'media center'] },
+  { group: 'store', patterns: ['store room', 'storage', 'store', 'supply room', 'equipment room'] },
+  { group: 'wc', patterns: ['toilet block', 'ablution block', 'ablution', 'wc', 'toilet', 'washroom', 'restroom'] },
+  { group: 'stair', patterns: ['staircase', 'stairwell', 'stair hall', 'stairs', 'stair'] },
+  { group: 'lift', patterns: ['lift core', 'lift lobby', 'elevator', 'lift'] },
+  { group: 'corridor', patterns: ['corridor', 'circulation', 'verandah', 'veranda', 'passage', 'walkway'] },
+]
+
+const SCHOOL_CLASSIFIER = buildGroupClassifier(SCHOOL_ROOM_GROUPS)
+
+export function roomGroupForSchool(name: string): SchoolRoomGroup | null {
+  return SCHOOL_CLASSIFIER(name) as SchoolRoomGroup | null
+}
+
+export const SCHOOL_ADJACENCY_RULES: AdjacencyRule[] = [
+  { from: 'classroom', to: 'corridor', weight: 3 },
+  { from: 'admin', to: 'corridor', weight: 2 },
+  { from: 'library', to: 'corridor', weight: 2 },
+  { from: 'wc', to: 'corridor', weight: 2 },
+  { from: 'stair', to: 'corridor', weight: 2 },
+  { from: 'library', to: 'admin', weight: 1 },
+  { from: 'store', to: 'classroom', weight: 1 },
+]
+
+export type WarehouseRoomGroup =
+  | 'warehouse-floor'
+  | 'loading'
+  | 'admin'
+  | 'store'
+  | 'wc'
+  | 'stair'
+  | 'lift'
+  | 'corridor'
+
+export const WAREHOUSE_ROOM_GROUPS: RoomGroupSpec[] = [
+  { group: 'warehouse-floor', patterns: ['warehouse floor', 'warehouse', 'factory floor', 'manufacturing', 'workshop', 'storage floor', 'production floor'] },
+  { group: 'loading', patterns: ['loading bay', 'loading dock', 'loading area', 'receiving', 'dispatch'] },
+  { group: 'admin', patterns: ['office / admin', 'office', 'admin office', 'administrative', 'staff room', 'staff office'] },
+  { group: 'store', patterns: ['store room', 'storage room', 'store', 'storage', 'supply room'] },
+  { group: 'wc', patterns: ['wc', 'toilet', 'ablution', 'washroom', 'restroom', 'change room'] },
+  { group: 'stair', patterns: ['staircase', 'stairwell', 'stair hall', 'stairs', 'stair', 'ladder'] },
+  { group: 'lift', patterns: ['lift core', 'lift lobby', 'elevator', 'lift', 'goods lift', 'platform lift'] },
+  { group: 'corridor', patterns: ['corridor', 'circulation', 'passage', 'walkway', 'aisle'] },
+]
+
+const WAREHOUSE_CLASSIFIER = buildGroupClassifier(WAREHOUSE_ROOM_GROUPS)
+
+export function roomGroupForWarehouse(name: string): WarehouseRoomGroup | null {
+  return WAREHOUSE_CLASSIFIER(name) as WarehouseRoomGroup | null
+}
+
+export const WAREHOUSE_ADJACENCY_RULES: AdjacencyRule[] = [
+  { from: 'warehouse-floor', to: 'loading', weight: 3 },
+  { from: 'admin', to: 'warehouse-floor', weight: 2 },
+  { from: 'admin', to: 'corridor', weight: 2 },
+  { from: 'wc', to: 'corridor', weight: 2 },
+  { from: 'stair', to: 'corridor', weight: 2 },
+  { from: 'store', to: 'warehouse-floor', weight: 1 },
+  { from: 'loading', to: 'corridor', weight: 1 },
+]

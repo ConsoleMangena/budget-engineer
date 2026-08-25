@@ -388,22 +388,6 @@ describe('wheelchairPassable', () => {
 
 describe('analyzeAccessibility — mandatory rooms', () => {
   it('reports specific reason for mandatory room without wheelchair door', () => {
-    const plan = {
-      rooms: [
-        { id: 'bedroom', name: 'Bedroom', x: 0, y: 0, width: 4, height: 3.5 },
-        { id: 'corridor', name: 'Corridor', x: 4, y: 0, width: 3, height: 1.2 },
-      ],
-      bubbleDiagram: {
-        nodes: [
-          { id: 'bedroom', name: 'Bedroom', areaM2: 14, group: 'bedroom', role: 'private' },
-          { id: 'corridor', name: 'Corridor', areaM2: 3.6, group: 'corridor', role: 'circulation' },
-        ],
-        edges: [
-          // No edges → bedroom has no incoming edges → accessible by default (no door check).
-          // Instead, give it a narrow door edge so the mandatory check triggers.
-        ],
-      },
-    }
     // Manually build a graph with mandatory + narrow door
     const graph: DualGraph = {
       nodes: [
@@ -466,9 +450,7 @@ describe('shortestPathEgress — custom exits', () => {
     )
     const graph = buildDualGraph(plan)
     // Without custom exit, "Back Door" doesn't match the regex (no "entrance" etc.)
-    const reportDefault = shortestPathEgress(graph)
-    const backdoorDefault = reportDefault.paths.find((p) => p.fromNodeId === 'backdoor')
-    // With custom exit, it should be identified as exit with distance 0
+    // Without custom exit, "Back Door" doesn't match the regex (no "entrance" etc.)
     const reportCustom = shortestPathEgress(graph, [{ label: 'Back Door' }])
     const backdoorCustom = reportCustom.paths.find((p) => p.fromNodeId === 'backdoor')
     expect(backdoorCustom?.distance).toBe(0)
@@ -533,7 +515,7 @@ describe('shortestPathEgress — disconnected room', () => {
 
 describe('shortestPathEgress — doorWidths and compliant', () => {
   it('collects door widths along the egress path', () => {
-    const plan = makeSimplePlan()
+    const plan = makeSimplePlan() as ReturnType<typeof makeSimplePlan> & { openings?: { id: string; wallId: string; offset: number; width: number; kind: 'door' | 'window' }[] }
     plan.rooms.push({ id: 'entrance', name: 'Entrance', x: 10, y: 4, width: 3, height: 2 })
     plan.bubbleDiagram.nodes.push({
       id: 'entrance', name: 'Entrance', areaM2: 6, group: 'entrance', role: 'circulation',
