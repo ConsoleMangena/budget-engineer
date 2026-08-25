@@ -345,3 +345,137 @@ describe('planModelToIfcStep', () => {
     expect(ifc).toContain('IFCPOSITIVELENGTHMEASURE(1.2)')
   })
 })
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — context defaults                                       */
+/* ------------------------------------------------------------------ */
+
+describe('planModelToIfcStep — context defaults', () => {
+  it('uses default projectName when ctx omitted', () => {
+    const ifc = planModelToIfcStep(makePlan())!
+    expect(ifc).toContain("FILE_NAME('Budget Engineer Project.ifc'")
+    expect(ifc).toContain("IFCBUILDING(")
+    // Building name defaults to projectName = 'Budget Engineer Project'
+    expect(ifc).toContain("'Budget Engineer Project'")
+  })
+
+  it('uses default siteName when ctx omitted', () => {
+    const ifc = planModelToIfcStep(makePlan())!
+    expect(ifc).toContain("IFCSITE(")
+    expect(ifc).toContain("'Site'")
+  })
+
+  it('uses custom projectName from ctx', () => {
+    const ifc = planModelToIfcStep(makePlan(), { projectName: 'My House' })!
+    expect(ifc).toContain("FILE_NAME('My House.ifc'")
+    expect(ifc).toContain("'My House'")
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — office building type                                   */
+/* ------------------------------------------------------------------ */
+
+describe('planModelToIfcStep — office building type', () => {
+  it('uses E1 occupancy class and 1HR fire rating for office', () => {
+    const officeCtx: IfcDesignContext = {
+      buildingType: 'office-commercial',
+      storeys: 1,
+      projectName: 'Office Test',
+    }
+    const ifc = planModelToIfcStep(makePlan(), officeCtx)!
+    // office-commercial → classifyOccupancy → E1 → fireRatingMinForClass(60) → 1HR
+    expect(ifc).toContain("IFCPROPERTYSINGLEVALUE('OccupancyClass',$,IFCTEXT('E1'),$)")
+    expect(ifc).toContain("IFCPROPERTYSINGLEVALUE('FireRating',$,IFCTEXT('1HR'),$)")
+  })
+
+  it('resolveUseTypeForBuilding returns business for office-commercial', () => {
+    expect(resolveUseTypeForBuilding('office-commercial')).toBe('business')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — adjacency graph fallback                               */
+/* ------------------------------------------------------------------ */
+
+describe('planModelToIfcStep — adjacency graph fallback', () => {
+  it('emits IFCRELSPACEBOUNDARY from adjacencyGraph when no bubbleDiagram', () => {
+    const plan = makePlan({
+      adjacencyGraph: {
+        rules: [
+          { from: 'r1', to: 'r2', weight: 3 },
+          { from: 'r1', to: 'r3', weight: 1 },
+        ],
+      },
+    })
+    const ifc = planModelToIfcStep(plan, CTX)!
+    const boundaries = ifc.match(/IFCRELSPACEBOUNDARY\(/g) || []
+    expect(boundaries.length).toBe(2)
+    // weight >= 2 → .PHYSICAL., weight < 2 → .INTERNAL.
+    expect(ifc).toContain('.PHYSICAL.')
+    expect(ifc).toContain('.INTERNAL.')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — daylight factor per zone                               */
+/* ------------------------------------------------------------------ */
+
+describe('planModelToIfcStep — daylight factor', () => {
+  it('public rooms get DaylightFactor 2.0', () => {
+    const ifc = planModelToIfcStep(makePlan(), CTX)!
+    // Living Room is public zone → daylightFactorForZone returns 2.0
+    expect(ifc).toContain("IFCPROPERTYSINGLEVALUE('DaylightFactor',$,IFCREAL(2),$)")
+  })
+
+  it('service rooms get DaylightFactor 1.0', () => {
+    const ifc = planModelToIfcStep(makePlan(), CTX)!
+    // Kitchen is service zone → daylightFactorForZone returns 1.0
+    // Both public (2.0) and service (1.0) are present
+    expect(ifc).toContain("IFCREAL(2)")
+    expect(ifc).toContain("IFCREAL(1)")
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — window default sillHeight                              */
+/* ------------------------------------------------------------------ */
+
+describe('planModelToIfcStep — window sillHeight default', () => {
+  it('window without sillHeight gets 0.9 default', () => {
+    const plan = makePlan({
+      openings: [
+        { id: 'win-1', wallId: 'w-ext-1', kind: 'window', offset: 0.3, width: 1.2, height: 1.2 },
+      ],
+    })
+    const ifc = planModelToIfcStep(plan, CTX)!
+    // SillHeight 0.9 should appear in the WindowCommon pset
+    expect(ifc).toContain("'SillHeight'")
+    expect(ifc).toContain("IFCREAL(0.9)")
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — multiple openings (door + window combined)             */
+/* ------------------------------------------------------------------ */
+
+describe('planModelToIfcStep — multiple openings', () => {
+  it('emits both IFCDOOR and IFCWINDOW with correct counts', () => {
+    const plan = makePlan({
+      openings: [
+        { id: 'door-1', wallId: 'w-int-1', kind: 'door', offset: 0.5, width: 0.9, height: 2.1 },
+        { id: 'door-2', wallId: 'w-int-1', kind: 'door', offset: 0.8, width: 0.8, height: 2.1 },
+        { id: 'win-1', wallId: 'w-ext-1', kind: 'window', offset: 0.3, width: 1.2, height: 1.2, sillHeight: 0.9 },
+      ],
+    })
+    const ifc = planModelToIfcStep(plan, CTX)!
+    const doorCount = (ifc.match(/IFCDOOR\(/g) || []).length
+    const windowCount = (ifc.match(/IFCWINDOW\(/g) || []).length
+    const openingCount = (ifc.match(/IFCOPENINGELEMENT\(/g) || []).length
+    const voidsCount = (ifc.match(/IFCRELVOIDSELEMENT\(/g) || []).length
+    expect(doorCount).toBe(2)
+    expect(windowCount).toBe(1)
+    expect(openingCount).toBe(3)
+    expect(voidsCount).toBe(3)
+  })
+})

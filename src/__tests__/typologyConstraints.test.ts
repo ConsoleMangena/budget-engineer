@@ -377,6 +377,234 @@ describe('evaluation summary', () => {
   })
 })
 
+// ─── Daylighting evaluator ────────────────────────────────────────────────
+
+describe('daylighting evaluator', () => {
+  it('warns when window-to-wall ratio is below minimum', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Open-Plan Office', width: 15, height: 10 }),
+      makeRoom({ name: 'Reception', width: 5, height: 4 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Conference Room', width: 6, height: 5 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+      makeRoom({ name: 'Toilet', width: 3, height: 3 }),
+      makeRoom({ name: 'Server Room', width: 3, height: 3 }),
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const daylightFinding = result.findings.find((f) => f.rule === 'window-ratio')
+    // Office needs 15% window ratio — with no window rooms, ratio is 0%
+    expect(daylightFinding).toBeDefined()
+    expect(daylightFinding!.severity).toBe('warning')
+  })
+})
+
+// ─── Emergency exits — travel distance warning ──────────────────────────────
+
+describe('emergency exits evaluator', () => {
+  it('warns when building dimension exceeds max travel distance', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Main Space', width: 10, height: 10 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Back Door', width: 2, height: 2 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+    ]
+    // House maxTravelDistanceM = 25, building 30×30 exceeds it
+    const result = evaluateTypologyConstraints('house-residential', makeInput(rooms, 30, 30))
+    const travelFinding = result.findings.find((f) => f.rule === 'travel-distance')
+    expect(travelFinding).toBeDefined()
+    expect(travelFinding!.severity).toBe('warning')
+  })
+})
+
+// ─── Building services — no wet rooms ───────────────────────────────────────
+
+describe('building services evaluator', () => {
+  it('reports info when no wet rooms found', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Main Space', width: 10, height: 10 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 15, height: 1.5 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const plumbingFinding = result.findings.find((f) => f.rule === 'services-plumbing')
+    expect(plumbingFinding).toBeDefined()
+    expect(plumbingFinding!.severity).toBe('info')
+  })
+})
+
+// ─── Reception evaluator ────────────────────────────────────────────────────
+
+describe('reception evaluator', () => {
+  it('errors when no reception area found', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Open-Plan Office', width: 15, height: 10 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+      makeRoom({ name: 'Toilet', width: 3, height: 3 }),
+      makeRoom({ name: 'Server Room', width: 3, height: 3 }),
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const receptionFinding = result.findings.find((f) => f.rule === 'reception-missing')
+    expect(receptionFinding).toBeDefined()
+    expect(receptionFinding!.severity).toBe('error')
+  })
+})
+
+// ─── Core planning — service shaft area ─────────────────────────────────────
+
+describe('core planning evaluator', () => {
+  it('errors when service shaft area is below minimum', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Open-Plan Office', width: 15, height: 10 }),
+      makeRoom({ name: 'Reception', width: 5, height: 4 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Conference Room', width: 6, height: 5 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+      makeRoom({ name: 'Toilet', width: 3, height: 3 }),
+      makeRoom({ name: 'Server Room', width: 3, height: 3 }),
+      makeRoom({ name: 'Services', width: 1, height: 1 }), // 1m² < 2m² min
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const shaftFinding = result.findings.find((f) => f.rule === 'core-shaft-area')
+    expect(shaftFinding).toBeDefined()
+    expect(shaftFinding!.severity).toBe('error')
+  })
+})
+
+// ─── Functional zoning — per-unit area warning ──────────────────────────────
+
+describe('functional zoning evaluator', () => {
+  it('warns when open-plan per-unit area is below minimum', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Open-Plan Office', width: 3, height: 3 }), // 9m² < 10m² min per unit
+      makeRoom({ name: 'Reception', width: 5, height: 4 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Conference Room', width: 6, height: 5 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+      makeRoom({ name: 'Toilet', width: 3, height: 3 }),
+      makeRoom({ name: 'Server Room', width: 3, height: 3 }),
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const perUnitFinding = result.findings.find((f) => f.rule === 'zone-open-plan-per-unit')
+    expect(perUnitFinding).toBeDefined()
+    expect(perUnitFinding!.severity).toBe('warning')
+  })
+})
+
+// ─── Accessibility — accessible WC ──────────────────────────────────────────
+
+describe('accessibility evaluator', () => {
+  it('reports info when no accessible WC found', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Open-Plan Office', width: 15, height: 10 }),
+      makeRoom({ name: 'Reception', width: 5, height: 4 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Conference Room', width: 6, height: 5 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+      makeRoom({ name: 'Server Room', width: 3, height: 3 }),
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const wcFinding = result.findings.find((f) => f.rule === 'accessible-wc')
+    expect(wcFinding).toBeDefined()
+    expect(wcFinding!.severity).toBe('info')
+  })
+})
+
+// ─── Structural grid — max span warning ─────────────────────────────────────
+
+describe('structural grid evaluator', () => {
+  it('warns when building span exceeds max', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Main Space', width: 10, height: 10 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Back Door', width: 2, height: 2 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+    ]
+    // Office maxSpanM = 8.0, building 30×30 exceeds it
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 30))
+    const spanFinding = result.findings.find((f) => f.rule === 'max-span')
+    expect(spanFinding).toBeDefined()
+    expect(spanFinding!.severity).toBe('warning')
+  })
+})
+
+// ─── Meeting rooms — undersized area ────────────────────────────────────────
+
+describe('meeting rooms evaluator', () => {
+  it('errors when meeting room area is below minimum', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Open-Plan Office', width: 15, height: 10 }),
+      makeRoom({ name: 'Reception', width: 5, height: 4 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Meeting Room', width: 2, height: 2 }), // 4m² < 8m² min for small meeting
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+      makeRoom({ name: 'Toilet', width: 3, height: 3 }),
+      makeRoom({ name: 'Server Room', width: 3, height: 3 }),
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const meetingFinding = result.findings.find((f) => f.rule === 'meeting-small meeting')
+    expect(meetingFinding).toBeDefined()
+    expect(meetingFinding!.severity).toBe('error')
+  })
+})
+
+// ─── Workspace layouts — open-plan warning ──────────────────────────────────
+
+describe('workspace layouts evaluator', () => {
+  it('warns when open-plan area per room is below minimum', () => {
+    const rooms: RoomRect[] = [
+      makeRoom({ name: 'Open-Plan Office', width: 3, height: 3 }), // 9m² / 1 room = 9m² < 10m² min per person
+      makeRoom({ name: 'Reception', width: 5, height: 4 }),
+      makeRoom({ name: 'Main Entrance', width: 3, height: 3 }),
+      makeRoom({ name: 'Fire Exit', width: 2, height: 2 }),
+      makeRoom({ name: 'Conference Room', width: 6, height: 5 }),
+      makeRoom({ name: 'Staircase', width: 3, height: 5 }),
+      makeRoom({ name: 'Staircase 2', width: 3, height: 5 }),
+      makeRoom({ name: 'Lift', width: 2, height: 2 }),
+      makeRoom({ name: 'Corridor', width: 20, height: 1.5 }),
+      makeRoom({ name: 'Toilet', width: 3, height: 3 }),
+      makeRoom({ name: 'Server Room', width: 3, height: 3 }),
+    ]
+    const result = evaluateTypologyConstraints('office-commercial', makeInput(rooms, 30, 20))
+    const openPlanFinding = result.findings.find((f) => f.rule === 'workspace-open-plan')
+    expect(openPlanFinding).toBeDefined()
+    expect(openPlanFinding!.severity).toBe('warning')
+  })
+})
+
 // ─── All 16 typologies — evaluation smoke test ─────────────────────────────
 
 describe('all 16 typologies — evaluation smoke', () => {

@@ -335,3 +335,237 @@ describe('shortestPathEgress', () => {
     expect(report.paths.length).toBe(0)
   })
 })
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — zone classification                                     */
+/* ------------------------------------------------------------------ */
+
+describe('classifyZone — public rooms', () => {
+  it('classifies living/dining/bedroom as public zone', () => {
+    const graph = buildDualGraph(makeSimplePlan())
+    const living = graph.nodes.find((n) => n.id === 'living')
+    const bedroom = graph.nodes.find((n) => n.id === 'bedroom')
+    expect(living?.zone).toBe('public')
+    expect(bedroom?.zone).toBe('public')
+  })
+
+  it('classifies kitchen as service zone', () => {
+    const graph = buildDualGraph(makeSimplePlan())
+    const kitchen = graph.nodes.find((n) => n.id === 'kitchen')
+    expect(kitchen?.zone).toBe('service')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — wheelchairPassable on edges                            */
+/* ------------------------------------------------------------------ */
+
+describe('wheelchairPassable', () => {
+  it('marks edges with doorWidth >= 0.9 as wheelchairPassable', () => {
+    const plan = makePlanWithDoors() // d1: 0.9m, d2: 0.8m
+    const graph = buildDualGraph(plan)
+    // The first edge (living→kitchen) gets door d1 (0.9m)
+    const edges = graph.edges
+    const passable = edges.find((e) => e.doorWidth >= 0.9)
+    const notPassable = edges.filter((e) => e.doorWidth > 0 && e.doorWidth < 0.9)
+    if (passable) expect(passable.wheelchairPassable).toBe(true)
+    for (const e of notPassable) {
+      expect(e.wheelchairPassable).toBe(false)
+    }
+  })
+
+  it('marks edges with no door as not wheelchair-passable', () => {
+    const graph = buildDualGraph(makeSimplePlan()) // no openings
+    for (const edge of graph.edges) {
+      expect(edge.wheelchairPassable).toBe(false)
+    }
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — analyzeAccessibility with mandatory rooms              */
+/* ------------------------------------------------------------------ */
+
+describe('analyzeAccessibility — mandatory rooms', () => {
+  it('reports specific reason for mandatory room without wheelchair door', () => {
+    const plan = {
+      rooms: [
+        { id: 'bedroom', name: 'Bedroom', x: 0, y: 0, width: 4, height: 3.5 },
+        { id: 'corridor', name: 'Corridor', x: 4, y: 0, width: 3, height: 1.2 },
+      ],
+      bubbleDiagram: {
+        nodes: [
+          { id: 'bedroom', name: 'Bedroom', areaM2: 14, group: 'bedroom', role: 'private' },
+          { id: 'corridor', name: 'Corridor', areaM2: 3.6, group: 'corridor', role: 'circulation' },
+        ],
+        edges: [
+          // No edges → bedroom has no incoming edges → accessible by default (no door check).
+          // Instead, give it a narrow door edge so the mandatory check triggers.
+        ],
+      },
+    }
+    // Manually build a graph with mandatory + narrow door
+    const graph: DualGraph = {
+      nodes: [
+        { id: 'bedroom', name: 'Bedroom', areaM2: 14, occupancyClass: 'B2', accessible: true, mandatory: true, centrality: 0, zone: 'public' },
+        { id: 'wc', name: 'WC', areaM2: 2, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'service' },
+      ],
+      edges: [
+        { from: 'bedroom', to: 'wc', doorWidth: 0.7, fireRating: 30, weight: 2, wallLength: 2, wheelchairPassable: false },
+      ],
+    }
+    const report = analyzeAccessibility(graph)
+    const bedroomResult = report.nodeResults.find((r) => r.nodeId === 'bedroom')
+    expect(bedroomResult?.accessible).toBe(false)
+    expect(bedroomResult?.reason).toContain('Mandatory room')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — centralityRole labels                                  */
+/* ------------------------------------------------------------------ */
+
+describe('analyzeCentrality — centralityRole', () => {
+  it('assigns role labels based on centrality thresholds', () => {
+    const graph: DualGraph = {
+      nodes: [
+        { id: 'hub', name: 'Hub', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'circulation' },
+        { id: 'a', name: 'A', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+        { id: 'b', name: 'B', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+        { id: 'c', name: 'C', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+        { id: 'leaf', name: 'Leaf', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+      ],
+      edges: [
+        { from: 'hub', to: 'a', doorWidth: 0, fireRating: 30, weight: 1, wallLength: 3, wheelchairPassable: false },
+        { from: 'hub', to: 'b', doorWidth: 0, fireRating: 30, weight: 1, wallLength: 3, wheelchairPassable: false },
+        { from: 'hub', to: 'c', doorWidth: 0, fireRating: 30, weight: 1, wallLength: 3, wheelchairPassable: false },
+        { from: 'hub', to: 'leaf', doorWidth: 0, fireRating: 30, weight: 1, wallLength: 3, wheelchairPassable: false },
+      ],
+    }
+    const report = analyzeCentrality(graph)
+    const hubRanking = report.rankings.find((r) => r.nodeId === 'hub')
+    // Hub is the only path between all leaf pairs → highest centrality
+    expect(hubRanking!.role).toBe('Primary circulation hub')
+    expect(hubRanking!.centrality).toBeGreaterThanOrEqual(0.8)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — shortestPathEgress custom exits                        */
+/* ------------------------------------------------------------------ */
+
+describe('shortestPathEgress — custom exits', () => {
+  it('uses custom exit labels to identify exit nodes', () => {
+    const plan = makeSimplePlan()
+    plan.rooms.push({ id: 'backdoor', name: 'Back Door', x: 10, y: 4, width: 3, height: 2 })
+    plan.bubbleDiagram.nodes.push({
+      id: 'backdoor', name: 'Back Door', areaM2: 6, group: 'circulation', role: 'circulation',
+    })
+    plan.bubbleDiagram.edges.push(
+      { from: 'corridor', to: 'backdoor', type: 'door', weight: 2 },
+    )
+    const graph = buildDualGraph(plan)
+    // Without custom exit, "Back Door" doesn't match the regex (no "entrance" etc.)
+    const reportDefault = shortestPathEgress(graph)
+    const backdoorDefault = reportDefault.paths.find((p) => p.fromNodeId === 'backdoor')
+    // With custom exit, it should be identified as exit with distance 0
+    const reportCustom = shortestPathEgress(graph, [{ label: 'Back Door' }])
+    const backdoorCustom = reportCustom.paths.find((p) => p.fromNodeId === 'backdoor')
+    expect(backdoorCustom?.distance).toBe(0)
+    expect(backdoorCustom?.compliant).toBe(true)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — shortestPathEgress fallback exit (highest centrality)  */
+/* ------------------------------------------------------------------ */
+
+describe('shortestPathEgress — fallback exit', () => {
+  it('uses highest-centrality node when no exit room exists', () => {
+    // No entrance/exit rooms — all rooms are private/circulation but none match exit regex
+    const graph: DualGraph = {
+      nodes: [
+        { id: 'a', name: 'Room A', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+        { id: 'b', name: 'Room B', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0.5, zone: 'private' },
+      ],
+      edges: [
+        { from: 'a', to: 'b', doorWidth: 1.0, fireRating: 30, weight: 2, wallLength: 3, wheelchairPassable: true },
+      ],
+    }
+    const report = shortestPathEgress(graph)
+    // Node b has higher centrality → should become the fallback exit
+    const bPath = report.paths.find((p) => p.fromNodeId === 'b')
+    expect(bPath?.distance).toBe(0)
+    expect(bPath?.toExitName).toBe('Room B')
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — shortestPathEgress disconnected room                   */
+/* ------------------------------------------------------------------ */
+
+describe('shortestPathEgress — disconnected room', () => {
+  it('reports Infinity distance and non-compliant for disconnected room', () => {
+    const graph: DualGraph = {
+      nodes: [
+        { id: 'entrance', name: 'Entrance', areaM2: 6, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'circulation' },
+        { id: 'connected', name: 'Connected Room', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+        { id: 'disconnected', name: 'Disconnected Room', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+      ],
+      edges: [
+        { from: 'connected', to: 'entrance', doorWidth: 1.0, fireRating: 30, weight: 2, wallLength: 3, wheelchairPassable: true },
+        // No edge to 'disconnected'
+      ],
+    }
+    const report = shortestPathEgress(graph)
+    const discPath = report.paths.find((p) => p.fromNodeId === 'disconnected')
+    expect(discPath?.distance).toBe(Infinity)
+    expect(discPath?.compliant).toBe(false)
+    expect(discPath?.toExitName).toBe('(none)')
+    expect(report.maxEgressDistance).toBe(Infinity)
+    expect(report.compliant).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/*  Gap tests — egress door widths and compliance                      */
+/* ------------------------------------------------------------------ */
+
+describe('shortestPathEgress — doorWidths and compliant', () => {
+  it('collects door widths along the egress path', () => {
+    const plan = makeSimplePlan()
+    plan.rooms.push({ id: 'entrance', name: 'Entrance', x: 10, y: 4, width: 3, height: 2 })
+    plan.bubbleDiagram.nodes.push({
+      id: 'entrance', name: 'Entrance', areaM2: 6, group: 'entrance', role: 'circulation',
+    })
+    plan.bubbleDiagram.edges.push(
+      { from: 'corridor', to: 'entrance', type: 'door', weight: 2 },
+    )
+    plan.openings = [
+      { id: 'd1', wallId: 'w1', offset: 0.5, width: 1.0, kind: 'door' },
+    ]
+    const graph = buildDualGraph(plan)
+    const report = shortestPathEgress(graph)
+    // Living → corridor → entrance (two edges → two door widths)
+    const livingPath = report.paths.find((p) => p.fromNodeId === 'living')
+    expect(livingPath).toBeDefined()
+    expect(livingPath!.doorWidths.length).toBeGreaterThan(0)
+    expect(typeof livingPath!.compliant).toBe('boolean')
+  })
+
+  it('reports non-compliant when door widths are below minimum', () => {
+    const graph: DualGraph = {
+      nodes: [
+        { id: 'entrance', name: 'Entrance', areaM2: 6, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'circulation' },
+        { id: 'room', name: 'Room', areaM2: 10, occupancyClass: 'B2', accessible: true, mandatory: false, centrality: 0, zone: 'private' },
+      ],
+      edges: [
+        { from: 'room', to: 'entrance', doorWidth: 0.6, fireRating: 30, weight: 2, wallLength: 3, wheelchairPassable: false },
+      ],
+    }
+    const report = shortestPathEgress(graph)
+    const roomPath = report.paths.find((p) => p.fromNodeId === 'room')
+    expect(roomPath?.compliant).toBe(false)
+    expect(roomPath?.doorWidths).toContain(0.6)
+  })
+})
