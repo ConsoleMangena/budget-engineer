@@ -9,12 +9,30 @@ import { computeOccupancyAndEgress, type EgressResult, type UseType } from './eg
 import { computeGravityLoads, type StructuralLoadResult, type StructuralOccupancy } from './structuralLoad'
 import { estimateEnergyDemand, type EnergyDemandResult } from './energyDemand'
 import { estimateCost, type CostEstimateResult } from './costEstimate'
+import { computeFar, type FarResult } from './farCalculator'
+import { computeDensity, type DensityResult } from './densityCalculator'
+import { computeParking, type ParkingResult, type ParkingUseRatio } from './parkingCalculator'
 
 export interface AnalysisInput {
   plan: PlanModel | null
   design: DesignOption | null
   boq: BOQ | null
   buildingType: string
+  siteAreaM2?: number
+  far?: number
+  zones?: { floors: number; footprintM2?: number }[]
+  bonusFar?: number
+  residentialPct?: number
+  avgUnitSizeM2?: number
+  householdSize?: number
+  parkingOptions?: {
+    hasTransit?: boolean
+    transitReduction?: number
+    hasSharedParking?: boolean
+    sharedReduction?: number
+    tdmReduction?: number
+    carshareSpaces?: number
+  }
 }
 
 export interface DefaultEnvelopeAssembly {
@@ -36,6 +54,9 @@ export interface AnalysisResult {
   structural: StructuralLoadResult
   energy: EnergyDemandResult
   cost: CostEstimateResult
+  far: FarResult | null
+  density: DensityResult | null
+  parking: ParkingResult | null
   roomDaylightFlags: number
   warnings: string[]
 }
@@ -84,6 +105,17 @@ const USE_TYPE_MAP: Record<string, UseType> = {
   retail: 'mercantile',
   industrial: 'industrial',
   storage: 'storage',
+}
+
+const PARKING_USE_MAP: Record<string, ParkingUseRatio['use']> = {
+  house: 'residential',
+  apartment: 'residential',
+  office: 'office',
+  school: 'educational',
+  clinic: 'institutional',
+  retail: 'retail',
+  industrial: 'industrial',
+  storage: 'industrial',
 }
 
 export function getDefaultEnvelope(buildingType: string): DefaultEnvelopeAssembly {
@@ -172,6 +204,50 @@ export function assembleAnalysis(input: AnalysisInput): AnalysisResult {
     warnings.push('Energy demand calculation failed')
   }
 
+  let far: FarResult | null = null
+  try {
+    if (input.siteAreaM2 && input.siteAreaM2 > 0) {
+      const gfa = design?.grossFloorArea ?? areaSchedule.grossFloorArea
+      const floors = design?.floors ?? 1
+      far = computeFar({
+        siteAreaM2: input.siteAreaM2,
+        zones: input.zones ?? [{ floors, footprintM2: floors > 0 ? gfa / floors : gfa }],
+        bonusFar: input.bonusFar,
+      })
+    }
+  } catch {
+    warnings.push('FAR calculation failed')
+  }
+
+  let density: DensityResult | null = null
+  try {
+    if (far && far.totalGfaM2 > 0) {
+      density = computeDensity({
+        siteAreaM2: input.siteAreaM2!,
+        far: far.baseFar,
+        avgUnitSizeM2: input.avgUnitSizeM2,
+        residentialPct: input.residentialPct,
+        householdSize: input.householdSize,
+      })
+    }
+  } catch {
+    warnings.push('Density calculation failed')
+  }
+
+  let parking: ParkingResult | null = null
+  try {
+    if (input.siteAreaM2 && input.siteAreaM2 > 0) {
+      const gfa = design?.grossFloorArea ?? areaSchedule.grossFloorArea
+      const pUse = PARKING_USE_MAP[bt] ?? 'residential'
+      parking = computeParking(
+        [{ use: pUse, areaM2: gfa }],
+        input.parkingOptions,
+      )
+    }
+  } catch {
+    warnings.push('Parking calculation failed')
+  }
+
   let cost: CostEstimateResult
   if (boq && design) {
     try {
@@ -191,7 +267,7 @@ export function assembleAnalysis(input: AnalysisInput): AnalysisResult {
     cost = { grandTotal: 0, costPerM2: 0, currency: 'USD', subtotal: 0, contingency: 0, professionalFees: 0, vat: 0, boqReused: true, warnings: ['No design available'] }
   }
 
-  return { areaSchedule, envelope, daylight, egress, structural, energy, cost, roomDaylightFlags, warnings }
+  return { areaSchedule, envelope, daylight, egress, structural, energy, cost, far, density, parking, roomDaylightFlags, warnings }
 }
 
 export function emptyAnalysis(): AnalysisResult {
@@ -203,6 +279,9 @@ export function emptyAnalysis(): AnalysisResult {
     structural: computeGravityLoads({ area: 0 }),
     energy: estimateEnergyDemand({ grossFloorArea: 0, envelopeUValue: 0, envelopeArea: 0 }),
     cost: { grandTotal: 0, costPerM2: 0, currency: 'USD', subtotal: 0, contingency: 0, professionalFees: 0, vat: 0, boqReused: true, warnings: ['No design'] },
+    far: null,
+    density: null,
+    parking: null,
     roomDaylightFlags: 0,
     warnings: [],
   }

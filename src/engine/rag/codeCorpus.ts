@@ -16,6 +16,20 @@ import type { CodeDocument } from './types'
 import { parseCodeDocument } from './extraction'
 import { RagIndex, createIndex } from './ragIndex'
 import { SAZ_CATALOGUE_DOC, TYPOLOGIES_GUIDE_DOC } from './curatedCorpus'
+import {
+  BUILDING_CODES_DOC,
+  BUILDING_ENVELOPE_DOC,
+  STRUCTURAL_SYSTEMS_DOC,
+  FIRE_LIFE_SAFETY_DOC,
+  MATERIAL_SELECTION_DOC,
+  ACCESSIBILITY_DESIGN_DOC,
+  BUILDING_SERVICES_DOC,
+  ARCHITECT_CALCULATOR_DOC,
+  URBAN_CALCULATOR_DOC,
+  COST_ESTIMATION_DOC,
+  ZONING_AND_CODES_DOC,
+  SITE_ANALYSIS_DOC,
+} from './skillsCorpus'
 
 export const BY_LAWS_1977_TEXT = [
   '1 General Requirements',
@@ -133,5 +147,23 @@ export const ZIQS_SMM_DOC: CodeDocument = parseCodeDocument({
 })
 
 export function buildDefaultRagIndex(): RagIndex {
-  return createIndex([BY_LAWS_1977_DOC, SI_56_2025_DOC, SAZ_CATALOGUE_DOC, TYPOLOGIES_GUIDE_DOC, ZIQS_SMM_DOC])
+  return createIndex([
+    BY_LAWS_1977_DOC,
+    SI_56_2025_DOC,
+    SAZ_CATALOGUE_DOC,
+    TYPOLOGIES_GUIDE_DOC,
+    ZIQS_SMM_DOC,
+    BUILDING_CODES_DOC,
+    BUILDING_ENVELOPE_DOC,
+    STRUCTURAL_SYSTEMS_DOC,
+    FIRE_LIFE_SAFETY_DOC,
+    MATERIAL_SELECTION_DOC,
+    ACCESSIBILITY_DESIGN_DOC,
+    BUILDING_SERVICES_DOC,
+    ARCHITECT_CALCULATOR_DOC,
+    URBAN_CALCULATOR_DOC,
+    COST_ESTIMATION_DOC,
+    ZONING_AND_CODES_DOC,
+    SITE_ANALYSIS_DOC,
+  ])
 }
