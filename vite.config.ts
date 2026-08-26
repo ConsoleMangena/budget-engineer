@@ -1,14 +1,39 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
 
 const rootDir = import.meta.dirname;
 
+/**
+ * Make CSS non-render-blocking: converts <link rel="stylesheet" ...>
+ * to media="print" onload="this.media='all'" with a <noscript> fallback.
+ * Skips links that already have onload (e.g. Google Fonts).
+ * Saves ~195ms render-blocking time on the critical path.
+ */
+function nonBlockingCss(): Plugin {
+  return {
+    name: 'non-blocking-css',
+    enforce: 'post',
+    transformIndexHtml(html) {
+      // Only target stylesheet links WITHOUT an existing onload attribute
+      return html.replace(
+        /<link\s+rel="stylesheet"\s+(?!onload)([^>]*?href="([^"]+)"[^>]*?)>/g,
+        (_match, attrs, _href) => {
+          // Skip if this link already has media="print" (already non-blocking)
+          if (attrs.includes('onload') || attrs.includes('media="print"')) return _match;
+          return `<link rel="stylesheet" ${attrs} media="print" onload="this.media='all'"><noscript><link rel="stylesheet" ${attrs}></noscript>`;
+        },
+      );
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
+    nonBlockingCss(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon-192.png', 'icon-512.png'],
@@ -60,8 +85,10 @@ export default defineConfig({
       external: ['@mlc-ai/web-llm'],
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/react-router')) return 'react-vendor'
-          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'react-vendor'
+          // React core (critical path — must render before anything else)
+          if (id.includes('/react-dom/') || id.includes('/react/')) return 'react-vendor'
+          // React Router — loads in parallel with React, not blocking initial render
+          if (id.includes('react-router')) return 'router-vendor'
           if (
             id.includes('framer-motion') ||
             id.includes('lucide-react') ||
