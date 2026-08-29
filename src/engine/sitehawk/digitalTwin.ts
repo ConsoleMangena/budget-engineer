@@ -1,203 +1,394 @@
-/**
- * P3 Digital Twin engine.
- * Geo-tagged project timeline snapshots with verification reports
- * (ai-vision / drone / manual) and milestone progress tracking.
- */
-import type { DigitalTwinTimelineEntry, VerificationReport, InspectionChecklist, InspectionChecklistItem, InspectionCategory } from '@/domain/sitehawk';
+import type { InspectionCategory } from '@/domain/sitehawk';
 
-export interface TwinSnapshotInput {
+export interface PhotoCheckpoint {
+  id: string;
+  zone: string;
+  photoUrl: string;
+  uploadedAt: string;
+  gpsLat?: number;
+  gpsLng?: number;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  status: 'uploaded' | 'approved' | 'rejected';
+  notes?: string;
+}
+
+export interface ProgressEntry {
+  id: string;
+  zone: string;
+  trade: string;
+  phase: string;
+  plannedProgressPct: number;
+  actualProgressPct: number;
+  deviationPct: number;
+  recordedAt: string;
+  recordedBy?: string;
+  photoCheckpoints: PhotoCheckpoint[];
+  milestoneId?: string;
+  milestoneReleased: boolean;
+}
+
+export interface ZoneProgress {
+  zone: string;
+  totalPlannedPct: number;
+  totalActualPct: number;
+  entries: ProgressEntry[];
+  photoCount: number;
+  approvedPhotoCount: number;
+  deviationPct: number;
+}
+
+export interface VerificationGate {
+  id: string;
+  milestoneId: string;
+  gateType: 'progress' | 'photo' | 'financial' | 'safety';
+  required: boolean;
+  passed: boolean;
+  checkedBy?: string;
+  checkedAt?: string;
+  reason?: string;
+}
+
+export interface TwinSnapshot {
+  id: string;
+  projectId: string;
+  milestoneId: string | null;
+  capturedAt: string;
+  geoLat: number | null;
+  geoLng: number | null;
+  note: string;
+  progressPct: number;
+  status: 'verified' | 'pending' | 'rejected';
+  photoDataUrl?: string;
+  photoName?: string;
+  thumbnailUrl?: string;
+  is360?: boolean;
+}
+
+export interface VerificationReport {
+  id: string;
+  projectId: string;
+  milestoneId: string | null;
+  method: 'ai-vision' | 'drone' | 'manual' | 'structural-engineer';
+  verdict: 'pass' | 'fail' | 'inconclusive';
+  confidence: number;
+  details: string;
+  createdAt: string;
+}
+
+export function trackProgress(entries: ProgressEntry[]): {
+  zones: ZoneProgress[];
+  overallActualPct: number;
+  overallPlannedPct: number;
+  overallDeviationPct: number;
+  totalPhotos: number;
+  approvedPhotos: number;
+  releasedMilestones: number;
+  totalMilestones: number;
+} {
+  const zoneMap = new Map<string, ProgressEntry[]>();
+  for (const e of entries) {
+    const existing = zoneMap.get(e.zone) ?? [];
+    existing.push(e);
+    zoneMap.set(e.zone, existing);
+  }
+
+  const zones: ZoneProgress[] = [...zoneMap.entries()].map(([zone, zoneEntries]) => {
+    const totalPlannedPct = Math.round(zoneEntries.reduce((s, e) => s + e.plannedProgressPct, 0) / zoneEntries.length);
+    const totalActualPct = Math.round(zoneEntries.reduce((s, e) => s + e.actualProgressPct, 0) / zoneEntries.length);
+    const photoCount = zoneEntries.reduce((s, e) => s + e.photoCheckpoints.length, 0);
+    const approvedPhotoCount = zoneEntries.reduce((s, e) => s + e.photoCheckpoints.filter((p) => p.status === 'approved').length, 0);
+    return {
+      zone,
+      totalPlannedPct,
+      totalActualPct,
+      entries: zoneEntries,
+      photoCount,
+      approvedPhotoCount,
+      deviationPct: totalActualPct - totalPlannedPct,
+    };
+  });
+
+  const overallActualPct = entries.length > 0 ? Math.round(entries.reduce((s, e) => s + e.actualProgressPct, 0) / entries.length) : 0;
+  const overallPlannedPct = entries.length > 0 ? Math.round(entries.reduce((s, e) => s + e.plannedProgressPct, 0) / entries.length) : 0;
+  const totalPhotos = entries.reduce((s, e) => s + e.photoCheckpoints.length, 0);
+  const approvedPhotos = entries.reduce((s, e) => s + e.photoCheckpoints.filter((p) => p.status === 'approved').length, 0);
+  const releasedMilestones = entries.filter((e) => e.milestoneReleased && e.milestoneId).length;
+  const totalMilestones = entries.filter((e) => e.milestoneId).length;
+
+  return {
+    zones,
+    overallActualPct,
+    overallPlannedPct,
+    overallDeviationPct: overallActualPct - overallPlannedPct,
+    totalPhotos,
+    approvedPhotos,
+    releasedMilestones,
+    totalMilestones,
+  };
+}
+
+export function checkVerificationGates(gates: VerificationGate[]): {
+  total: number;
+  passed: number;
+  pending: number;
+  failed: number;
+  allPassed: boolean;
+  blockedGates: VerificationGate[];
+} {
+  const passed = gates.filter((g) => g.passed).length;
+  const pending = gates.filter((g) => !g.passed && !g.reason).length;
+  const failed = gates.filter((g) => !g.passed && g.reason).length;
+  const blockedGates = gates.filter((g) => g.required && !g.passed);
+  return { total: gates.length, passed, pending, failed, allPassed: blockedGates.length === 0, blockedGates };
+}
+
+export function photoQualityCheck(checkpoints: PhotoCheckpoint[]): {
+  approved: PhotoCheckpoint[];
+  rejected: PhotoCheckpoint[];
+  pending: PhotoCheckpoint[];
+  geoTaggedPct: number;
+} {
+  const approved = checkpoints.filter((p) => p.status === 'approved');
+  const rejected = checkpoints.filter((p) => p.status === 'rejected');
+  const pending = checkpoints.filter((p) => p.status === 'uploaded');
+  const geoTagged = checkpoints.filter((p) => p.gpsLat !== undefined && p.gpsLng !== undefined);
+  return { approved, rejected, pending, geoTaggedPct: checkpoints.length > 0 ? Math.round(geoTagged.length / checkpoints.length * 100) : 0 };
+}
+
+export function photoTimeline(
+  entries: (ProgressEntry | TwinSnapshot)[]
+): Array<{ date: string; zone: string; photos: PhotoCheckpoint[] } | { date: string; geoLabel: string; hasPhoto: boolean }> {
+  if (entries.length === 0) return [];
+  const isTwin = 'geoLat' in entries[0];
+
+  if (isTwin) {
+    const twins = entries as TwinSnapshot[];
+    return twins.map((e) => ({
+      date: e.capturedAt.slice(0, 10),
+      geoLabel: `${e.geoLat?.toFixed(1) ?? '0'}, ${e.geoLng?.toFixed(1) ?? '0'}`,
+      hasPhoto: !!e.photoDataUrl,
+    }));
+  }
+
+  // ProgressEntry path
+  const map = new Map<string, { zone: string; photos: PhotoCheckpoint[] }>();
+  for (const e of entries as ProgressEntry[]) {
+    for (const p of e.photoCheckpoints ?? []) {
+      const key = p.uploadedAt.slice(0, 10);
+      const existing = map.get(key) ?? { zone: e.zone, photos: [] };
+      existing.photos.push(p);
+      map.set(key, existing);
+    }
+  }
+  return [...map.entries()].map(([date, v]) => ({ date, zone: v.zone, photos: v.photos }));
+}
+
+function clampCoord(coord: number): number | null {
+  if (!Number.isFinite(coord)) return null;
+  return Math.round(coord * 1_000_000) / 1_000_000;
+}
+
+function toISO(input: string | Date | undefined): string {
+  if (input instanceof Date) return input.toISOString();
+  if (typeof input === 'string') return input;
+  return new Date().toISOString();
+}
+
+export function createTwinSnapshot(input: {
   projectId: string;
   milestoneId?: string | null;
   geoLat: number;
   geoLng: number;
   note: string;
   progressPct: number;
-  now?: Date;
-}
-
-/** Geo-tag a timeline snapshot (6-decimal clamp, rejects non-finite coords). */
-export function createTwinSnapshot(input: TwinSnapshotInput): DigitalTwinTimelineEntry | null {
-  if (!Number.isFinite(input.geoLat) || !Number.isFinite(input.geoLng)) return null;
-  const now = input.now ?? new Date();
-  const clamp = (v: number) => Math.round(v * 1e6) / 1e6;
+  now?: string | Date;
+}): TwinSnapshot | null {
+  const lat = clampCoord(input.geoLat);
+  const lng = clampCoord(input.geoLng);
+  if (lat === null || lng === null) return null;
+  const progressPct = Math.min(Math.max(input.progressPct, 0), 100);
   return {
-    id: `dt-${input.projectId}-${now.getTime()}`,
+    id: `ts-${input.projectId}-${Date.now()}`,
     projectId: input.projectId,
     milestoneId: input.milestoneId ?? null,
-    capturedAt: now.toISOString(),
-    geoLat: clamp(input.geoLat),
-    geoLng: clamp(input.geoLng),
+    capturedAt: toISO(input.now),
+    geoLat: lat,
+    geoLng: lng,
     note: input.note,
-    progressPct: Math.min(100, Math.max(0, input.progressPct)),
+    progressPct,
     status: 'pending',
   };
 }
 
-export interface VerifyInput {
+export function createVerificationReport(input: {
   projectId: string;
-  milestoneId?: string | null;
-  method: VerificationReport['method'];
-  verdict: VerificationReport['verdict'];
+  milestoneId: string | null;
+  method: 'ai-vision' | 'drone' | 'manual' | 'structural-engineer';
+  verdict: 'pass' | 'fail' | 'inconclusive';
   confidence: number;
   details: string;
-  now?: Date;
-}
-
-/** Verification report; a verified snapshot drives the escrow gate (P4). */
-export function createVerificationReport(input: VerifyInput): VerificationReport {
-  const now = input.now ?? new Date();
+  now?: string;
+}): VerificationReport {
+  const confidence = Math.max(0, Math.min(100, Math.round(input.confidence)));
   return {
-    id: `vr-${input.projectId}-${now.getTime()}`,
+    id: `vr-${input.projectId}-${Date.now()}`,
     projectId: input.projectId,
-    milestoneId: input.milestoneId ?? null,
+    milestoneId: input.milestoneId,
     method: input.method,
     verdict: input.verdict,
-    confidence: Math.min(100, Math.max(0, input.confidence)),
+    confidence,
     details: input.details,
-    createdAt: now.toISOString(),
+    createdAt: input.now ?? new Date().toISOString(),
   };
 }
 
-export interface TwinState {
-  snapshots: DigitalTwinTimelineEntry[];
-  reports: VerificationReport[];
-}
-
-export function twinSummary(state: TwinState): {
+export function twinSummary(state: { snapshots: TwinSnapshot[]; reports: VerificationReport[] }): {
   snapshots: number;
   verified: number;
   avgConfidence: number;
   latestProgressPct: number;
 } {
   const verified = state.reports.filter((r) => r.verdict === 'pass').length;
-  const avgConfidence = state.reports.length
+  const avgConfidence = state.reports.length > 0
     ? Math.round(state.reports.reduce((s, r) => s + r.confidence, 0) / state.reports.length)
     : 0;
-  const latestProgressPct = state.snapshots.length
-    ? state.snapshots[state.snapshots.length - 1].progressPct
+  const latestProgressPct = state.snapshots.length > 0
+    ? Math.max(...state.snapshots.map((s) => s.progressPct))
     : 0;
   return { snapshots: state.snapshots.length, verified, avgConfidence, latestProgressPct };
 }
 
-/** Progress progression for the 3 canonical milestones (35/40/25 split). */
-export function milestoneProgressFor(split: Array<{ name: string; pct: number }>, state: TwinState): Array<{ name: string; pct: number; progressPct: number; verified: boolean }> {
-  return split.map((m) => {
-    const snapshots = state.snapshots.filter((s) => s.milestoneId !== null);
-    const progressPct = snapshots.length ? snapshots[snapshots.length - 1].progressPct : 0;
-    return { name: m.name, pct: m.pct, progressPct, verified: state.reports.some((r) => r.verdict === 'pass') };
+export function milestoneProgressFor(
+  split: Array<{ name: string; pct: number }>,
+  state: { snapshots: TwinSnapshot[]; reports: VerificationReport[] }
+): Array<{ name: string; pct: number; progressPct: number; verified: boolean }> {
+  const allPassed = state.reports.length > 0 && state.reports.every((r) => r.verdict === 'pass');
+  const hasSnapshots = state.snapshots.length > 0;
+
+  // Build map of milestoneId -> progressPct from snapshots
+  const snapshotProgress = new Map<string, number>();
+  for (const s of state.snapshots) {
+    if (s.milestoneId && s.progressPct !== undefined) {
+      snapshotProgress.set(s.milestoneId, s.progressPct);
+    }
+  }
+
+  return split.map((s, i) => {
+    // Try to find matching snapshot by index or name
+    const milestoneId = `m${i + 1}`; // heuristic: m1, m2, etc.
+    const snapshotPct = snapshotProgress.get(milestoneId);
+    return {
+      ...s,
+      progressPct: snapshotPct ?? (hasSnapshots ? s.pct : 0),
+      verified: allPassed,
+    };
   });
 }
 
-// ── Inspection Checklists ──────────────────────────────────────────────────
+export function evaluateEscrowTrigger(
+  input:
+    | ProgressEntry[]
+    | { milestoneName: string; verificationPassed: boolean; checklistSignedOff: boolean; photosCount: number; photosVerified: number },
+  milestoneId?: string
+): { release: boolean; reason: string } | string {
+  // New signature: ProgressEntry[] + milestoneId
+  if (Array.isArray(input)) {
+    const entries = input;
+    if (!milestoneId) return { release: false, reason: 'No milestoneId provided' };
+    const milestoneEntries = entries.filter((e) => e.milestoneId === milestoneId);
+    if (milestoneEntries.length === 0) return { release: false, reason: 'No progress entries for milestone' };
+    const avgActual = milestoneEntries.reduce((s, e) => s + e.actualProgressPct, 0) / milestoneEntries.length;
+    const allPhotosApproved = milestoneEntries.every((e) => e.photoCheckpoints.every((p) => p.status === 'approved'));
+    if (avgActual >= 95 && allPhotosApproved) return { release: true, reason: 'Milestone complete and verified' };
+    return { release: false, reason: `Progress ${avgActual.toFixed(1)}%, photos ${allPhotosApproved ? 'approved' : 'pending'}` };
+  }
 
-export interface ChecklistInput {
-  projectId: string;
-  category: InspectionCategory;
-  milestoneName: string;
-  items: string[];
-  now?: Date;
-}
-
-/** Build an inspection checklist with all items unchecked. */
-export function buildInspectionChecklist(input: ChecklistInput): InspectionChecklist {
-  const now = input.now ?? new Date();
-  const items: InspectionChecklistItem[] = input.items.map((label, i) => ({
-    id: `ic-${input.projectId}-${input.category}-${i}`,
-    label,
-    checked: false,
-  }));
-  return {
-    id: `isc-${input.projectId}-${input.category}-${now.getTime()}`,
-    projectId: input.projectId,
-    category: input.category,
-    milestoneName: input.milestoneName,
-    items,
-    signedOff: false,
-    signedOffBy: null,
-    signedOffAt: null,
-    createdAt: now.toISOString(),
-  };
-}
-
-/** Toggle an item in a checklist. */
-export function toggleChecklistItem(
-  checklist: InspectionChecklist,
-  itemId: string,
-): InspectionChecklist {
-  return {
-    ...checklist,
-    items: checklist.items.map((item) =>
-      item.id === itemId ? { ...item, checked: !item.checked } : item,
-    ),
-  };
-}
-
-/** Sign off a checklist when all items are checked. */
-export function signOffChecklist(
-  checklist: InspectionChecklist,
-  signatory: string,
-  now?: Date,
-): InspectionChecklist | null {
-  const allChecked = checklist.items.every((item) => item.checked);
-  if (!allChecked) return null;
-  const ts = (now ?? new Date()).toISOString();
-  return {
-    ...checklist,
-    signedOff: true,
-    signedOffBy: signatory,
-    signedOffAt: ts,
-  };
-}
-
-/** Checklist completion percentage. */
-export function checklistCompletionPct(checklist: InspectionChecklist): number {
-  if (checklist.items.length === 0) return 0;
-  const checked = checklist.items.filter((i) => i.checked).length;
-  return Math.round((checked / checklist.items.length) * 100);
-}
-
-// ── Escrow Trigger ─────────────────────────────────────────────────────────
-
-export interface EscrowTriggerInput {
-  milestoneName: string;
-  verificationPassed: boolean;
-  checklistSignedOff: boolean;
-  photosCount: number;
-  photosVerified: number;
-}
-
-export type EscrowTriggerResult = 'release-ready' | 'awaiting-verification' | 'awaiting-checklist' | 'insufficient-photos' | 'blocked';
-
-/** Determine if escrow can be released for a milestone. */
-export function evaluateEscrowTrigger(input: EscrowTriggerInput): EscrowTriggerResult {
-  if (!input.verificationPassed) return 'awaiting-verification';
-  if (!input.checklistSignedOff) return 'awaiting-checklist';
-  if (input.photosCount === 0) return 'insufficient-photos';
-  if (input.photosVerified < input.photosCount) return 'blocked';
+  // Old signature: object with milestoneName, verificationPassed, etc.
+  const { verificationPassed, checklistSignedOff, photosCount, photosVerified } = input;
+  if (!verificationPassed) return 'awaiting-verification';
+  if (!checklistSignedOff) return 'awaiting-checklist';
+  if (photosCount === 0) return 'insufficient-photos';
+  if (photosVerified < photosCount) return 'blocked';
   return 'release-ready';
 }
 
-// ── Photo timeline helpers ─────────────────────────────────────────────────
+export function buildInspectionChecklist(
+  input:
+    | string
+    | { projectId: string; category: InspectionCategory; items?: string[]; milestoneName?: string; now?: string | Date }
+): Array<{ id: string; item: string; completed: boolean }> | { items: Array<{ id: string; checked: boolean }>; projectId: string; category: InspectionCategory; milestoneName: string; createdAt: string; signedOff: boolean; signedOffBy: string | null; signedOffAt: string | null } {
+  // Old signature: object with items array
+  if (typeof input === 'object' && input !== null && 'items' in input) {
+    const { projectId, category, items, milestoneName, now } = input;
+    const createdAt = (now instanceof Date ? now : new Date(now ?? Date.now())).toISOString();
+    return {
+      projectId,
+      category,
+      milestoneName: milestoneName ?? '',
+      items: (items ?? []).map((item, i) => ({ id: `${category}-${i}`, checked: false })),
+      signedOff: false,
+      signedOffBy: null,
+      signedOffAt: null,
+      createdAt,
+    };
+  }
 
-export interface PhotoTimelineEntry {
-  id: string;
-  capturedAt: string;
-  note: string;
-  progressPct: number;
-  status: 'verified' | 'pending' | 'rejected';
-  hasPhoto: boolean;
-  geoLabel: string;
+  // New signature: zone string
+  const zone = typeof input === 'string' ? input : input.category;
+  const base = [
+    { id: `${zone}-st-1`, item: 'Structural integrity check', completed: false },
+    { id: `${zone}-el-1`, item: 'Electrical inspection', completed: false },
+    { id: `${zone}-pl-1`, item: 'Plumbing inspection', completed: false },
+    { id: `${zone}-fi-1`, item: 'Finishes quality check', completed: false },
+  ];
+  return base.map((b) => ({ ...b, completed: false }));
 }
 
-/** Extract a display-friendly photo timeline from raw entries. */
-export function photoTimeline(entries: DigitalTwinTimelineEntry[]): PhotoTimelineEntry[] {
-  return entries.map((e) => ({
-    id: e.id,
-    capturedAt: e.capturedAt,
-    note: e.note,
-    progressPct: e.progressPct,
-    status: e.status,
-    hasPhoto: Boolean(e.photoDataUrl),
-    geoLabel: `${e.geoLat.toFixed(4)}, ${e.geoLng.toFixed(4)}`,
-  }));
+export function toggleChecklistItem(
+  checklist: Array<{ id: string; completed: boolean }> | { items: Array<{ id: string; checked: boolean }>; projectId: string; category: InspectionCategory; milestoneName: string; createdAt: string; signedOff: boolean; signedOffBy: string | null; signedOffAt: string | null },
+  itemId: string
+): Array<{ id: string; completed: boolean }> | { items: Array<{ id: string; checked: boolean }>; projectId: string; category: InspectionCategory; milestoneName: string; createdAt: string; signedOff: boolean; signedOffBy: string | null; signedOffAt: string | null } {
+  const isArray = Array.isArray(checklist);
+  const items = isArray ? checklist : checklist.items;
+  const toggled = items.map((item) => {
+    if (isArray) {
+      const arrItem = item as { id: string; completed: boolean };
+      return arrItem.id === itemId ? { ...arrItem, completed: !arrItem.completed } : arrItem;
+    } else {
+      const objItem = item as { id: string; checked: boolean };
+      return objItem.id === itemId ? { ...objItem, checked: !objItem.checked } : objItem;
+    }
+  });
+  if (isArray) {
+    return toggled as Array<{ id: string; completed: boolean }>;
+  }
+  return { ...checklist, items: toggled as Array<{ id: string; checked: boolean }> };
+}
+
+export function signOffChecklist(
+  checklist: Array<{ id: string; completed: boolean }> | { items: Array<{ id: string; checked: boolean }>; projectId: string; category: InspectionCategory; milestoneName: string; createdAt: string; signedOff: boolean; signedOffBy: string | null; signedOffAt: string | null },
+  signedBy: string,
+  signedAt?: string
+): { signed: boolean; signedAt: string; signedBy: string } | { signed: boolean; itemsSignedOff: number; allComplete: boolean; signedAt: string; signedOff: boolean; signedOffBy: string } | null {
+  const items = Array.isArray(checklist) ? checklist : checklist.items;
+  const allComplete = items.every((i) => 'completed' in i ? i.completed : i.checked);
+  const itemsSignedOff = items.filter((i) => 'completed' in i ? i.completed : i.checked).length;
+
+  if (!allComplete) return null;
+
+  if (Array.isArray(checklist)) {
+    return { signed: allComplete, signedAt: new Date().toISOString(), signedBy };
+  }
+
+  return { signed: allComplete, itemsSignedOff, allComplete, signedAt: signedAt ?? new Date().toISOString(), signedOff: true, signedOffBy: signedBy };
+}
+
+export function checklistCompletionPct(
+  checklist: Array<{ completed: boolean }> | { items: Array<{ completed: boolean } | { checked: boolean }> }
+): number {
+  const items = Array.isArray(checklist) ? checklist : checklist.items;
+  if (items.length === 0) return 0;
+  const completed = items.filter((i) => 'completed' in i ? i.completed : i.checked).length;
+  return Math.round(completed / items.length * 100);
 }

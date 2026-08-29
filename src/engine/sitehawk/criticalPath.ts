@@ -1,381 +1,469 @@
-/**
- * P1 Critical Path engine.
- * CPM dependency mapping, forward pass, critical-path identification,
- * Gantt rows and cashflow curve from the locked baseline + schedules.
- */
-import type {
-  ScheduleRecord,
-  CriticalPathResult,
-  WbsDictionaryEntry,
-  RiskRegisterEntry,
-  RiskProbability,
-  RiskImpact,
-  RiskStatus,
-  SovLineItem,
-  CashflowProjectionMonth,
-  CashflowProjectionResult,
-} from '@/domain/sitehawk';
-import type { CostBaseline } from '@/domain/greenflag';
-
-export interface CpmTask {
+export interface GanttTask {
   id: string;
   name: string;
-  wbsCode: string;
-  durationDays: number;
-  predecessors: string[];
-  costCents: number;
-  startDays?: number;
-  endDays?: number;
+  wbsCode?: string;
+  phase: string;
+  startDate: string;
+  endDate: string;
+  progressPct: number;
+  dependencies: string[];
+  critical: boolean;
+  assignedTo?: string;
 }
 
-export function buildCriticalPath(tasks: CpmTask[]): CriticalPathResult {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const startOf = new Map<string, number>();
-  const memo = new Map<string, number>();
-
-  function earliestStart(id: string): number {
-    if (memo.has(id)) return memo.get(id)!;
-    const task = byId.get(id);
-    if (!task) return 0;
-    let start = 0;
-    for (const pred of task.predecessors) {
-      const predTask = byId.get(pred);
-      if (!predTask) continue;
-      start = Math.max(start, earliestStart(pred) + predTask.durationDays);
-    }
-    memo.set(id, start);
-    return start;
-  }
-
-  for (const task of tasks) {
-    startOf.set(task.id, earliestStart(task.id));
-  }
-
-  const endDays = Math.max(0, ...tasks.map((t) => startOf.get(t.id)! + t.durationDays));
-
-  const schedule: ScheduleRecord[] = tasks.map((t) => ({
-    id: t.id,
-    projectId: '',
-    task: t.name,
-    wbsCode: t.wbsCode,
-    startDate: '',
-    durationDays: t.durationDays,
-    predecessors: t.predecessors,
-    critical: false,
-    costCents: t.costCents,
-  }));
-
-  const criticalPath = findCriticalPath(tasks, startOf, endDays);
-  const criticalSet = new Set(criticalPath);
-  schedule.forEach((s) => { s.critical = criticalSet.has(s.id); });
-
-  return { schedule, criticalPath, totalDurationDays: endDays };
+export interface CriticalPath {
+  tasks: GanttTask[];
+  totalDurationDays: number;
+  criticalPathIds: string[];
+  floatDays: Map<string, number>;
+  projectFinishDate: string;
 }
 
-export function findCriticalPath(tasks: CpmTask[], startOf: Map<string, number>, endDays: number): string[] {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const successors = new Map<string, string[]>();
-  for (const t of tasks) {
-    for (const pred of t.predecessors) {
-      const list = successors.get(pred) ?? [];
-      list.push(t.id);
-      successors.set(pred, list);
-    }
-  }
-  const ends = tasks.filter((t) => (startOf.get(t.id) ?? 0) + t.durationDays >= endDays);
-  if (ends.length === 0) return [];
-
-  const path: string[] = [];
-  let current = ends[0].id;
-  while (current) {
-    path.unshift(current);
-    const task = byId.get(current);
-    const preds = (task?.predecessors ?? []).filter((p) => byId.has(p));
-    const criticalPred = preds.find(
-      (p) => (startOf.get(p) ?? 0) + byId.get(p)!.durationDays === (startOf.get(current) ?? 0),
-    );
-    if (!criticalPred) break;
-    current = criticalPred;
-  }
-  return path;
-}
-
-export interface GanttRow {
+export interface WbsDictionaryEntry {
   id: string;
+  projectId: string;
+  code: string;
+  level: number;
+  name: string;
+  category: string;
+  parent: string | null;
+}
+
+export interface RiskRegisterEntry {
+  id: string;
+  projectId: string;
+  code: string;
+  category: string;
+  description: string;
+  probability: 'low' | 'medium' | 'high' | 'critical';
+  impact: 'negligible' | 'minor' | 'moderate' | 'major' | 'severe';
+  score: number;
+  status: 'open' | 'mitigated' | 'closed' | 'accepted';
+  owner: string;
+  mitigation: string;
+  contingencyCents: number;
+  createdAt: string;
+}
+
+export interface SovLineItem {
+  id: string;
+  projectId: string;
+  wbsCode: string;
+  description: string;
+  unit: string;
+  quantity: number;
+  rateCents: number;
+  amountCents: number;
+  schedulePct: number;
+  earnedCents: number;
+  retainedCents: number;
+}
+
+export interface CashflowProjectionMonth {
+  monthKey: string;
+  label: string;
+  plannedInflowCents: number;
+  plannedOutflowCents: number;
+  netCents: number;
+  cumulativeNetCents: number;
+}
+
+export interface CashflowProjectionResult {
+  months: CashflowProjectionMonth[];
+  totalInflowCents: number;
+  totalOutflowCents: number;
+  nextCashflowDate: string;
+  nextCashflowCents: number;
+}
+
+export interface CriticalPathResult {
+  schedule: ScheduleRecord[];
+  criticalPath: string[];
+  totalDurationDays: number;
+}
+
+export interface ScheduleRecord {
+  id: string;
+  projectId: string;
   task: string;
   wbsCode: string;
-  startDays: number;
-  endDays: number;
+  startDate: string;
   durationDays: number;
+  predecessors: string[];
   critical: boolean;
-  progressPct: number;
+  costCents: number;
 }
 
-/** Gantt rows from the realized schedule, with optional per-task progress. */
-export function toGanttRows(schedule: ScheduleRecord[], progress?: Record<string, number>): GanttRow[] {
-  const byId = new Map(schedule.map((s) => [s.id, s]));
-  const memo = new Map<string, number>();
-  function earliestStart(id: string): number {
-    if (memo.has(id)) return memo.get(id)!;
-    const task = byId.get(id);
-    if (!task) return 0;
-    let start = 0;
-    for (const pred of task.predecessors) {
-      const predTask = byId.get(pred);
-      if (!predTask) continue;
-      start = Math.max(start, earliestStart(pred) + predTask.durationDays);
-    }
-    memo.set(id, start);
-    return start;
-  }
-  return schedule.map((s) => {
-    const startDays = earliestStart(s.id);
+function daysBetween(a: string, b: string): number {
+  return Math.max(1, Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000));
+}
+
+export function buildScheduleFromMilestones(
+  milestones: { id: string; title: string; plannedDays: number; category: string; dependencies?: string[] }[],
+): GanttTask[] {
+  let dayOffset = 0;
+  return milestones.map((m, i) => {
+    const start = dayOffset;
+    const duration = Math.max(m.plannedDays, 1);
+    dayOffset += duration;
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() + start);
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + start + duration);
     return {
-      id: s.id,
-      task: s.task,
-      wbsCode: s.wbsCode,
-      startDays,
-      endDays: startDays + s.durationDays,
-      durationDays: s.durationDays,
-      critical: s.critical,
-      progressPct: progress?.[s.id] ?? 0,
+      id: m.id,
+      name: m.title,
+      phase: m.category,
+      startDate: startDate.toISOString().split('T')[0],
+      endDate: endDate.toISOString().split('T')[0],
+      progressPct: 0,
+      dependencies: m.dependencies ?? (i > 0 ? [milestones[i - 1].id] : []),
+      critical: false,
     };
   });
 }
 
-/** Build a WBS dictionary from schedule tasks, deriving parent-child hierarchy from dotted codes. */
-export function buildWbsDictionary(
-  projectId: string,
-  schedule: ScheduleRecord[],
-): WbsDictionaryEntry[] {
-  const seen = new Map<string, WbsDictionaryEntry>();
-  for (const s of schedule) {
-    if (seen.has(s.wbsCode)) continue;
-    const parts = s.wbsCode.split('.');
-    const level = parts.length - 1;
-    const parent = level > 0 ? parts.slice(0, level).join('.') : null;
-    seen.set(s.wbsCode, {
-      id: `wbs-${s.wbsCode}`,
+export function computeCriticalPath(tasks: GanttTask[]): CriticalPath {
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+  const earliest = new Map<string, number>();
+  const duration = (id: string) => {
+    const t = taskMap.get(id);
+    return t ? daysBetween(t.startDate, t.endDate) : 0;
+  };
+
+  for (const t of tasks) {
+    const deps = t.dependencies.filter((d) => taskMap.has(d));
+    const maxDepEnd = deps.length > 0 ? Math.max(...deps.map((d) => (earliest.get(d) ?? 0) + duration(d))) : 0;
+    earliest.set(t.id, maxDepEnd);
+  }
+
+  const latest = new Map<string, number>();
+  const maxEarliestEnd = Math.max(...tasks.map((t) => (earliest.get(t.id) ?? 0) + duration(t.id)));
+  for (const t of [...tasks].reverse()) {
+    const dependents = tasks.filter((tt) => tt.dependencies.includes(t.id));
+    const minDepStart = dependents.length > 0
+      ? Math.min(...dependents.map((d) => latest.get(d.id) ?? maxEarliestEnd))
+      : maxEarliestEnd;
+    latest.set(t.id, minDepStart - duration(t.id));
+  }
+
+  const criticalPathIds: string[] = [];
+  const floatDays = new Map<string, number>();
+  for (const t of tasks) {
+    const float = (latest.get(t.id) ?? 0) - (earliest.get(t.id) ?? 0);
+    floatDays.set(t.id, Math.max(0, float));
+    const isCritical = Math.abs(float) < 1;
+    if (isCritical) criticalPathIds.push(t.id);
+  }
+
+  const criticalTasks = tasks.map((t) => ({ ...t, critical: criticalPathIds.includes(t.id) }));
+  const finishDate = new Date();
+  finishDate.setDate(finishDate.getDate() + maxEarliestEnd);
+
+  return {
+    tasks: criticalTasks,
+    totalDurationDays: maxEarliestEnd,
+    criticalPathIds,
+    floatDays,
+    projectFinishDate: finishDate.toISOString().split('T')[0],
+  };
+}
+
+export function findCriticalPath(
+  ids: string[],
+  predMap: Map<string, string[]>,
+  totalDurationDays: number
+): string[] {
+  if (ids.length === 0 || totalDurationDays === 0) return [];
+
+  const taskMap = new Map(ids.map((id) => [id, { id, duration: 1 }]));
+  const earliest = new Map<string, number>();
+  const latest = new Map<string, number>();
+
+  for (const id of ids) {
+    const preds = predMap.get(id) ?? [];
+    const maxPredEnd = preds.length > 0 ? Math.max(...preds.map((p) => (earliest.get(p) ?? 0) + (taskMap.get(p)?.duration ?? 1))) : 0;
+    earliest.set(id, maxPredEnd);
+  }
+
+  const maxEarliestEnd = Math.max(...ids.map((id) => (earliest.get(id) ?? 0) + (taskMap.get(id)?.duration ?? 1)));
+
+  for (const id of [...ids].reverse()) {
+    const succs = ids.filter((other) => predMap.get(other)?.includes(id));
+    const minSuccStart = succs.length > 0
+      ? Math.min(...succs.map((s) => latest.get(s) ?? maxEarliestEnd))
+      : maxEarliestEnd;
+    latest.set(id, minSuccStart - (taskMap.get(id)?.duration ?? 1));
+  }
+
+  const critical: string[] = [];
+  for (const id of ids) {
+    const float = (latest.get(id) ?? 0) - (earliest.get(id) ?? 0);
+    if (Math.abs(float) < 1) critical.push(id);
+  }
+
+  return critical;
+}
+
+export function buildCriticalPath(tasks: ScheduleRecord[]): CriticalPathResult {
+  if (tasks.length === 0) {
+    return { schedule: [], criticalPath: [], totalDurationDays: 0 };
+  }
+
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+  const earliestStart = new Map<string, number>();
+
+  for (const t of tasks) {
+    const preds = t.predecessors.filter((p) => taskMap.has(p));
+    const maxPredEnd = preds.length > 0
+      ? Math.max(...preds.map((p) => (earliestStart.get(p) ?? 0) + (taskMap.get(p)?.durationDays ?? 0)))
+      : 0;
+    earliestStart.set(t.id, maxPredEnd);
+  }
+
+  const earliestFinish = new Map<string, number>();
+  for (const t of tasks) {
+    earliestFinish.set(t.id, (earliestStart.get(t.id) ?? 0) + t.durationDays);
+  }
+
+  const totalDurationDays = Math.max(...earliestFinish.values());
+
+  const latestStart = new Map<string, number>();
+  for (const t of [...tasks].reverse()) {
+    const succs = tasks.filter((other) => other.predecessors.includes(t.id));
+    const minSuccStart = succs.length > 0
+      ? Math.min(...succs.map((s) => latestStart.get(s.id) ?? totalDurationDays))
+      : totalDurationDays;
+    latestStart.set(t.id, minSuccStart - t.durationDays);
+  }
+
+  const criticalPath: string[] = [];
+  for (const t of tasks) {
+    const float = (latestStart.get(t.id) ?? 0) - (earliestStart.get(t.id) ?? 0);
+    if (Math.abs(float) < 1) criticalPath.push(t.id);
+  }
+
+  const schedule: ScheduleRecord[] = tasks.map((t) => ({
+    ...t,
+    startDays: earliestStart.get(t.id) ?? 0,
+    endDays: earliestFinish.get(t.id) ?? 0,
+    critical: criticalPath.includes(t.id),
+  }));
+
+  return { schedule, criticalPath, totalDurationDays };
+}
+
+export function toGanttRows(
+  schedule: (ScheduleRecord & { startDays?: number; endDays?: number })[],
+  progressMap?: Record<string, number>
+): Array<{ id: string; name: string; startDays: number; endDays: number; progressPct: number; critical: boolean }> {
+  return schedule.map((t) => ({
+    id: t.id,
+    name: t.task,
+    startDays: (t as any).startDays ?? 0,
+    endDays: (t as any).endDays ?? 0,
+    progressPct: progressMap?.[t.id] ?? 0,
+    critical: t.critical ?? false,
+  }));
+}
+
+export function buildWbsDictionary(projectId: string, tasks: ScheduleRecord[]): WbsDictionaryEntry[] {
+  const seen = new Set<string>();
+  const entries: WbsDictionaryEntry[] = [];
+
+  for (const t of tasks) {
+    if (seen.has(t.wbsCode)) continue;
+    seen.add(t.wbsCode);
+
+    const firstSegment = t.wbsCode.split('.')[0];
+    const parent = firstSegment ? `wbs-${firstSegment}` : null;
+
+    entries.push({
+      id: `wbs-${t.wbsCode}`,
       projectId,
-      code: s.wbsCode,
-      level,
-      name: s.task,
-      category: level === 0 ? 'division' : level === 1 ? 'section' : 'detail',
-      parent: parent ? `wbs-${parent}` : null,
+      code: t.wbsCode,
+      level: 1,
+      name: t.task,
+      category: 'section',
+      parent,
     });
   }
-  return [...seen.values()];
+
+  return entries;
 }
 
-/** Cashflow S-curve from the baseline: cumulative milestone/cost spend. */
-export function cashflowCurve(baseline: CostBaseline | null, schedule: ScheduleRecord[]): Array<{ day: number; cumulativeCents: number }> {
-  if (!baseline || schedule.length === 0) return [];
-  const total = Math.max(baseline.totalCents, 1);
-  const totalDays = Math.max(1, ...schedule.map((s) => s.durationDays));
-  const out: Array<{ day: number; cumulativeCents: number }> = [];
-  for (let day = 0; day <= totalDays; day += Math.max(1, Math.floor(totalDays / 20))) {
-    const pct = day / totalDays;
-    const cumulativeCents = Math.round(total * (0.35 * Math.min(1, pct * 3) + 0.4 * Math.max(0, Math.min(1, (pct - 0.33) * 3)) + 0.25 * Math.max(0, Math.min(1, (pct - 0.66) * 3))));
-    out.push({ day, cumulativeCents });
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// P1 Risk Register — SADC volatility-adjusted contingency
-// ---------------------------------------------------------------------------
-
-const PROBABILITY_WEIGHT: Record<RiskProbability, number> = { low: 1, medium: 2, high: 3, critical: 4 };
-const IMPACT_WEIGHT: Record<RiskImpact, number> = { negligible: 1, minor: 2, moderate: 3, major: 4, severe: 5 };
-
-function riskScore(probability: RiskProbability, impact: RiskImpact): number {
-  return PROBABILITY_WEIGHT[probability] * IMPACT_WEIGHT[impact];
-}
-
-function contingencyForScore(score: number, totalCents: number): number {
-  const basePct = score >= 12 ? 0.15 : score >= 8 ? 0.10 : score >= 4 ? 0.06 : 0.03;
-  return Math.round(totalCents * basePct);
-}
-
-interface RiskTemplate {
-  category: string;
-  description: string;
-  baseProbability: RiskProbability;
-  baseImpact: RiskImpact;
-  owner: string;
-  mitigation: string;
-}
-
-const RISK_TEMPLATES: RiskTemplate[] = [
-  { category: 'Schedule', description: 'Critical path delay due to resource unavailability or weather', baseProbability: 'medium', baseImpact: 'major', owner: 'Project Manager', mitigation: 'Buffer float on non-critical tasks; pre-order materials 4 weeks ahead' },
-  { category: 'Cost', description: 'Material price volatility (cement, steel, bricks) exceeding SADC baseline', baseProbability: 'high', baseImpact: 'moderate', owner: 'Quantity Surveyor', mitigation: 'Forward commitments locked at C4; volatility-adjusted contingency' },
-  { category: 'Quality', description: 'Substandard workmanship requiring rework', baseProbability: 'medium', baseImpact: 'moderate', owner: 'Site Engineer', mitigation: 'Mandatory hold points; AI-vision verification at P3' },
-  { category: 'Safety', description: 'Site incident causing work stoppage', baseProbability: 'low', baseImpact: 'severe', owner: 'HSE Officer', mitigation: 'Mandatory PPE; daily toolbox talks; incident reporting' },
-  { category: 'Supply Chain', description: 'Supplier default or delivery delay beyond ETA', baseProbability: 'medium', baseImpact: 'major', owner: 'Procurement Lead', mitigation: 'Dual-source critical materials; escrow-gated payments' },
-  { category: 'Regulatory', description: 'Non-compliance with SANS 10400 or ZBC by-laws', baseProbability: 'low', baseImpact: 'major', owner: 'Architect', mitigation: 'Continuous compliance checking at each stage gate' },
-  { category: 'Financial', description: 'Cash flow shortfall between escrow releases', baseProbability: 'medium', baseImpact: 'moderate', owner: 'Financial Manager', mitigation: 'Monthly WIPAA forecasting; early billing on milestones' },
-  { category: 'Environmental', description: 'Rain delays or extreme weather events', baseProbability: 'medium', baseImpact: 'minor', owner: 'Site Manager', mitigation: 'Weather monitoring; indoor-work contingency days in schedule' },
-];
+type RiskProbability = 'low' | 'medium' | 'high' | 'critical';
 
 export function buildRiskRegister(
   projectId: string,
-  schedule: ScheduleRecord[],
-  baseline: CostBaseline | null,
-  volatilityCv: number = 0,
-  now: Date = new Date(),
+  _tasks: ScheduleRecord[],
+  baseline: { totalCents: number },
+  volatility: number = 0.25
 ): RiskRegisterEntry[] {
-  const totalCents = baseline?.totalCents ?? schedule.reduce((s, r) => s + r.costCents, 0);
-  const criticalCount = schedule.filter((s) => s.critical).length;
+  const categories = [
+    { cat: 'Schedule', desc: 'Critical path delay', impact: 'severe' as const, score: 4 + Math.round(volatility * 10), prob: (volatility > 0.3 ? 'critical' : 'high') as RiskProbability },
+    { cat: 'Cost', desc: 'Budget overrun', impact: 'major' as const, score: 4 + Math.round(volatility * 10), prob: (volatility > 0.3 ? 'critical' : 'high') as RiskProbability },
+    { cat: 'Quality', desc: 'Non-conformance to spec', impact: 'moderate' as const, score: 4 + Math.round(volatility * 5), prob: (volatility > 0.3 ? 'critical' : 'medium') as RiskProbability },
+    { cat: 'Safety', desc: 'Site accident', impact: 'severe' as const, score: 3 + Math.round(volatility * 5), prob: (volatility > 0.3 ? 'high' : 'medium') as RiskProbability },
+    { cat: 'Procurement', desc: 'Material delivery delay', impact: 'moderate' as const, score: 3 + Math.round(volatility * 5), prob: (volatility > 0.3 ? 'high' : 'medium') as RiskProbability },
+    { cat: 'Weather', desc: 'Adverse weather delay', impact: 'minor' as const, score: 2 + Math.round(volatility * 5), prob: 'medium' as RiskProbability },
+    { cat: 'Labour', desc: 'Skilled labour shortage', impact: 'moderate' as const, score: 3 + Math.round(volatility * 5), prob: (volatility > 0.3 ? 'high' : 'medium') as RiskProbability },
+    { cat: 'Scope', desc: 'Scope creep', impact: 'major' as const, score: 4 + Math.round(volatility * 5), prob: (volatility > 0.3 ? 'critical' : 'high') as RiskProbability },
+  ];
 
-  return RISK_TEMPLATES.map((tpl, i) => {
-    let { baseProbability: probability, baseImpact: impact } = tpl;
-    let score = riskScore(probability, impact);
-
-    // Escalate cost risks when market volatility is high
-    if (tpl.category === 'Cost' && volatilityCv > 0.3) {
-      probability = 'critical';
-      impact = 'severe';
-      score = riskScore(probability, impact);
-    }
-    // Escalate schedule risks when many critical tasks
-    if (tpl.category === 'Schedule' && criticalCount > schedule.length * 0.4) {
-      probability = 'high';
-      score = riskScore(probability, impact);
-    }
-
-    const status: RiskStatus = score <= 4 ? 'accepted' : 'open';
-
-    return {
-      id: `risk-${projectId}-${String(i + 1).padStart(3, '0')}`,
-      projectId,
-      code: `R-${String(i + 1).padStart(3, '0')}`,
-      category: tpl.category,
-      description: tpl.description,
-      probability,
-      impact,
-      score,
-      status,
-      owner: tpl.owner,
-      mitigation: tpl.mitigation,
-      contingencyCents: contingencyForScore(score, totalCents),
-      createdAt: now.toISOString(),
-    };
-  });
+  return categories.map((c, i) => ({
+    id: `risk-${projectId}-${i}`,
+    projectId,
+    code: `R-${i + 1}`,
+    category: c.cat,
+    description: c.desc,
+    probability: c.prob,
+    impact: c.impact,
+    score: c.score,
+    status: 'open' as const,
+    owner: 'Project Manager',
+    mitigation: `Mitigation for ${c.desc.toLowerCase()}`,
+    contingencyCents: Math.round(baseline.totalCents * 0.02),
+    createdAt: new Date().toISOString(),
+  }));
 }
-
-// ---------------------------------------------------------------------------
-// P1 Schedule of Values — earned value tracking per WBS line
-// ---------------------------------------------------------------------------
 
 export function buildScheduleOfValues(
   projectId: string,
   schedule: ScheduleRecord[],
-  baseline: CostBaseline | null,
+  _baseline: { totalCents: number }
 ): SovLineItem[] {
-  const totalCents = baseline?.totalCents ?? schedule.reduce((s, r) => s + r.costCents, 0);
-  const totalDays = Math.max(1, ...schedule.map((s) => s.durationDays));
-
-  // Group schedule by WBS code
-  const byWbs = new Map<string, { description: string; costCents: number; durationDays: number }>();
-  for (const s of schedule) {
-    const existing = byWbs.get(s.wbsCode);
-    if (existing) {
-      existing.costCents += s.costCents;
-      existing.durationDays = Math.max(existing.durationDays, s.durationDays);
-    } else {
-      byWbs.set(s.wbsCode, { description: s.task, costCents: s.costCents, durationDays: s.durationDays });
-    }
+  const grouped = new Map<string, { wbsCode: string; tasks: ScheduleRecord[]; totalCost: number }>();
+  for (const t of schedule) {
+    const existing = grouped.get(t.wbsCode) ?? { wbsCode: t.wbsCode, tasks: [], totalCost: 0 };
+    existing.tasks.push(t);
+    existing.totalCost += t.costCents;
+    grouped.set(t.wbsCode, existing);
   }
 
   const lines: SovLineItem[] = [];
-  for (const [wbsCode, entry] of byWbs) {
-    const schedulePct = totalDays > 0 ? (entry.durationDays / totalDays) * 100 : 0;
-    const amountCents = totalCents > 0 ? Math.round((entry.costCents / Math.max(totalCents, 1)) * totalCents) : 0;
+  let totalAmount = 0;
+  for (const [wbsCode, group] of grouped) {
+    const amountCents = group.totalCost;
+    totalAmount += amountCents;
     lines.push({
-      id: `sov-${projectId}-${wbsCode}`,
+      id: `sov-${wbsCode}`,
       projectId,
       wbsCode,
-      description: entry.description,
+      description: group.tasks[0]?.task ?? wbsCode,
       unit: 'lot',
       quantity: 1,
       rateCents: amountCents,
       amountCents,
-      schedulePct: Math.round(schedulePct * 10) / 10,
+      schedulePct: 0,
       earnedCents: 0,
       retainedCents: 0,
     });
   }
+
   return lines;
 }
 
-// ---------------------------------------------------------------------------
-// P1 Monthly Cashflow Projection — inflows vs outflows with next-cashflow
-// ---------------------------------------------------------------------------
-
 export function monthlyCashflowProjection(
-  baseline: CostBaseline | null,
-  schedule: ScheduleRecord[],
-  startDate: string = new Date().toISOString().slice(0, 10),
-  months: number = 12,
+  baseline: { totalCents: number } | null,
+  tasks: ScheduleRecord[],
+  startMonth: string = '2026-07-01',
+  months: number = 12
 ): CashflowProjectionResult {
-  if (!baseline || schedule.length === 0) {
+  if (!baseline || tasks.length === 0) {
     return { months: [], totalInflowCents: 0, totalOutflowCents: 0, nextCashflowDate: '', nextCashflowCents: 0 };
   }
 
-  const totalCents = Math.max(baseline.totalCents, 1);
-  const totalDays = Math.max(1, ...schedule.map((s) => s.durationDays));
+  const result = buildCriticalPath(tasks);
+  const totalDuration = result.totalDurationDays;
 
-  // Milestone split: 35% / 40% / 25% (foundation / shell / finishes)
-  const milestoneSplits = [0.35, 0.40, 0.25];
-  const baseDate = new Date(startDate + 'T00:00:00Z');
-
-  const result: CashflowProjectionMonth[] = [];
-  let cumulativeNet = 0;
+  const monthsArr: CashflowProjectionMonth[] = [];
+  const [startYear, startMonthNum] = startMonth.split('-').map(Number);
   let totalInflow = 0;
   let totalOutflow = 0;
-  let nextCashflowDate = '';
-  let nextCashflowCents = 0;
+  let cumulativeNet = 0;
 
-  for (let m = 0; m < months; m++) {
-    const monthDate = new Date(baseDate);
-    monthDate.setUTCMonth(monthDate.getUTCMonth() + m);
-    const monthKey = monthDate.toISOString().slice(0, 7);
-    const label = monthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  for (let i = 0; i < months; i++) {
+    const monthNum = startMonthNum + i;
+    const year = startYear + Math.floor((monthNum - 1) / 12);
+    const month = ((monthNum - 1) % 12) + 1;
+    const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+    const label = new Date(year, month - 1).toLocaleString('en-US', { month: 'short', year: 'numeric' });
 
-    // Which milestone falls in this month?
-    const dayInMonth = (m / months) * totalDays;
-    const plannedInflowCents = (() => {
-      if (m < Math.ceil(months * 0.35)) {
-        // Foundation phase
-        const phasePct = Math.min(1, dayInMonth / (totalDays * 0.35));
-        return Math.round(totalCents * milestoneSplits[0] * phasePct / Math.ceil(months * 0.35));
-      } else if (m < Math.ceil(months * 0.75)) {
-        // Shell phase
-        const phasePct = Math.min(1, (dayInMonth - totalDays * 0.35) / (totalDays * 0.40));
-        return Math.round(totalCents * milestoneSplits[1] * phasePct / Math.ceil(months * 0.40));
-      } else {
-        // Finishes phase
-        const phasePct = Math.min(1, (dayInMonth - totalDays * 0.75) / (totalDays * 0.25));
-        return Math.round(totalCents * milestoneSplits[2] * phasePct / Math.ceil(months * 0.25));
-      }
-    })();
+    const dayStart = i * Math.max(1, Math.floor(totalDuration / months));
+    const dayEnd = dayStart + Math.max(1, Math.floor(totalDuration / months));
+    const progressStart = totalDuration > 0 ? dayStart / totalDuration : 0;
+    const progressEnd = totalDuration > 0 ? dayEnd / totalDuration : 1;
+    const progress = (progressStart + progressEnd) / 2;
 
-    // Outflow = proportionate share of costs
-    const plannedOutflowCents = Math.round(totalCents / months);
-
+    const plannedInflowCents = Math.round(baseline.totalCents * progress * 1.15);
+    const plannedOutflowCents = Math.round(baseline.totalCents * progress * 0.85);
     const netCents = plannedInflowCents - plannedOutflowCents;
     cumulativeNet += netCents;
+
     totalInflow += plannedInflowCents;
     totalOutflow += plannedOutflowCents;
 
-    result.push({ monthKey, label, plannedInflowCents, plannedOutflowCents, netCents, cumulativeNetCents: cumulativeNet });
-
-    // Track next positive cashflow
-    if (plannedInflowCents > 0 && !nextCashflowDate) {
-      nextCashflowDate = monthKey;
-      nextCashflowCents = plannedInflowCents;
-    }
+    monthsArr.push({
+      monthKey,
+      label,
+      plannedInflowCents,
+      plannedOutflowCents,
+      netCents,
+      cumulativeNetCents: cumulativeNet,
+    });
   }
 
-  return { months: result, totalInflowCents: totalInflow, totalOutflowCents: totalOutflow, nextCashflowDate, nextCashflowCents };
+  const nextMonth = monthsArr.find((m) => m.plannedInflowCents > 0);
+  return {
+    months: monthsArr,
+    totalInflowCents: totalInflow,
+    totalOutflowCents: totalOutflow,
+    nextCashflowDate: nextMonth?.monthKey ?? '',
+    nextCashflowCents: nextMonth?.plannedInflowCents ?? 0,
+  };
+}
+
+export function cashflowCurve(
+  baseline: { totalCents: number } | null,
+  schedule: ScheduleRecord[]
+): Array<{ day: number; cumulativeCents: number }> {
+  if (!baseline || schedule.length === 0) return [];
+
+  const result = buildCriticalPath(schedule);
+  const totalDuration = result.totalDurationDays;
+  if (totalDuration === 0) return [];
+
+  const points: Array<{ day: number; cumulativeCents: number }> = [];
+  for (let day = 0; day <= totalDuration; day++) {
+    const progress = day / totalDuration;
+    const cumulativeCents = Math.round(baseline.totalCents * progress);
+    points.push({ day, cumulativeCents });
+  }
+
+  return points;
+}
+
+export function ganttProgress(tasks: GanttTask[]): { overallPct: number; byPhase: Map<string, number>; overdueCount: number; completedCount: number } {
+  const today = new Date().toISOString().split('T')[0];
+  let overdueCount = 0;
+  let completedCount = 0;
+  const phaseProgress = new Map<string, number[]>();
+
+  for (const t of tasks) {
+    if (t.progressPct >= 100) completedCount++;
+    else if (today > t.endDate && t.progressPct < 100) overdueCount++;
+
+    const existing = phaseProgress.get(t.phase) ?? [];
+    existing.push(t.progressPct);
+    phaseProgress.set(t.phase, existing);
+  }
+
+  const byPhase = new Map<string, number>();
+  for (const [phase, progs] of phaseProgress) {
+    byPhase.set(phase, Math.round(progs.reduce((s, p) => s + p, 0) / progs.length));
+  }
+
+  const overallPct = tasks.length > 0 ? Math.round(tasks.reduce((s, t) => s + t.progressPct, 0) / tasks.length) : 0;
+  return { overallPct, byPhase, overdueCount, completedCount };
 }
