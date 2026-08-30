@@ -304,7 +304,7 @@ function computeFloorPlate2(
   return { totalAreaM2, programAreaM2, circulationAreaM2, coreAreaM2, efficiency, grid, columns, rows }
 }
 
-export function hasOverlaps(rooms: AdjacencyRoom[]): boolean {
+function hasOverlaps(rooms: AdjacencyRoom[]): boolean {
   for (let i = 0; i < rooms.length; i++) {
     for (let j = i + 1; j < rooms.length; j++) {
       const a = rooms[i]
@@ -316,3 +316,5 @@ export function hasOverlaps(rooms: AdjacencyRoom[]): boolean {
   }
   return false
 }
+
+export { hasOverlaps }

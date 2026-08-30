@@ -1,4 +1,4 @@
-import type { RoomRect, WallSegment, Opening } from '../../domain/plan'
+import type { RoomRect, WallSegment, Opening, PlanModel } from '../../domain/plan'
 import { normalizeRooms, detectOverlaps, resolveOverlaps, snapCollection, snap } from './geometry-normalizer'
 import { isRequiredRoom } from '../layout/layout-templates'
 import { buildPolygons } from './room-polygons'
@@ -797,4 +797,23 @@ export function assemblePlan(input: PlanAssemblyInput) {
   }
 
   return { plan, warnings, rejected }
+}
+
+/** Lightweight compliance check: returns violations for rooms below §5 minimum dimensions. */
+export function validatePlanCompliance(plan: PlanModel): Array<{ roomId: string; name: string; minW: number; minD: number; actualW: number; actualD: number }> {
+  const violations: Array<{ roomId: string; name: string; minW: number; minD: number; actualW: number; actualD: number }> = []
+  for (const room of plan.rooms) {
+    const dims = getMinimumDimensions(room.name)
+    if (room.width < dims.minWidth - 0.05 || room.height < dims.minDepth - 0.05) {
+      violations.push({
+        roomId: room.id,
+        name: room.name,
+        minW: dims.minWidth,
+        minD: dims.minDepth,
+        actualW: room.width,
+        actualD: room.height,
+      })
+    }
+  }
+  return violations
 }

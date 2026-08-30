@@ -326,7 +326,7 @@ export function buildInspectionChecklist(
       projectId,
       category,
       milestoneName: milestoneName ?? '',
-      items: (items ?? []).map((item, i) => ({ id: `${category}-${i}`, checked: false })),
+      items: (items ?? []).map((_item, i) => ({ id: `${category}-${i}`, checked: false })),
       signedOff: false,
       signedOffBy: null,
       signedOffAt: null,

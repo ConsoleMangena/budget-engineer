@@ -1,4 +1,4 @@
-import { TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, Clock, Scale, ClipboardCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock, Scale } from 'lucide-react';
 import type { WipSnapshot, SolvencyCheck, HandoverItem } from '@/engine/sitehawk/wipaaMonitor';
 import { calculateWipaaFromSnapshot, runSolvencyCheck, buildHandoverChecklist, handoverProgress } from '@/engine/sitehawk/wipaaMonitor';
 

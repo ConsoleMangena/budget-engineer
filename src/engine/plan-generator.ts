@@ -4,8 +4,50 @@ import { getRoomProgram } from './roomPrograms'
 import { isResidential } from './buildingTypes'
 import { generateLayoutByTypology, type FloorContext } from '../lib/layout/typology-router'
 import type { FloorLayoutResult } from '../lib/layout/typology-router'
-import { assemblePlan, getMinimumDimensions } from '../lib/geometry/plan-intelligence'
+import { assemblePlan, validatePlanCompliance } from '../lib/geometry/plan-intelligence'
 import { listHouseTemplates } from '../lib/layout/layout-templates'
+import { getMinimumDimensions, getRoomStandard } from '@/engine/standards/roomStandards'
+
+/** Calculate the total minimum area (m²) required by a room program based on §5 standards. */
+function totalMinArea(program: { name: string; ratio: number }[]): number {
+  let total = 0
+  for (const p of program) {
+    const std = getRoomStandard(p.name)
+    total += std.minWidth * std.minDepth
+  }
+  return total
+}
+
+/**
+ * Pre-generation feasibility gate.
+ * Ensures the footprint can accommodate all program rooms at their §5 minimum sizes.
+ * Returns adjusted footprint dimensions if the original is too small.
+ */
+function ensureFeasibleFootprint(
+  footprint: { width: number; height: number },
+  program: { name: string; ratio: number }[],
+): { width: number; height: number; adjusted: boolean } {
+  const required = totalMinArea(program)
+  const available = footprint.width * footprint.height
+  if (available >= required) return { ...footprint, adjusted: false }
+
+  // Scale up proportionally to fit the program at minimum sizes
+  const scale = Math.sqrt(required / available) * 1.05 // 5% margin
+  const newWidth = Math.max(footprint.width * scale, 5.0)
+  const newHeight = Math.max(footprint.height * scale, 5.0)
+
+  // Keep aspect ratio close to original
+  const aspect = footprint.width / footprint.height
+  let finalW = newWidth
+  let finalH = newHeight
+  if (finalW / finalH > aspect * 1.5) {
+    finalW = finalH * aspect * 1.5
+  } else if (finalW / finalH < aspect / 1.5) {
+    finalH = finalW / aspect * 1.5
+  }
+
+  return { width: Math.round(finalW * 10) / 10, height: Math.round(finalH * 10) / 10, adjusted: true }
+}
 
 const GRID = 0.05
 const snap05 = (v: number) => Math.round(v / GRID) * GRID
@@ -31,11 +73,14 @@ function stampSpatialExtras(planModel: PlanModel, layoutResult: FloorLayoutResul
 
 function postProcessRooms(rooms: { id: string; name: string; x: number; y: number; width: number; height: number }[], fpW: number, fpH: number): { id: string; name: string; x: number; y: number; width: number; height: number }[] {
   const result = rooms.map(r => ({ ...r }))
+  let passes = 0
+  const maxPasses = 12
 
-  for (let pass = 0; pass < 5; pass++) {
-    let changed = false
+  while (passes < maxPasses) {
+    passes++
+    let changedThisPass = false
 
-    // 1. Expand rooms to minimum dimensions, shrink neighbors if needed
+    // 1. Expand rooms to minimum dimensions, shrink neighbors if needed (cascade-safe)
     for (let i = 0; i < result.length; i++) {
       const room = result[i]
       const dims = getMinimumDimensions(room.name)
@@ -50,13 +95,18 @@ function postProcessRooms(rooms: { id: string; name: string; x: number; y: numbe
           let remaining = needed
           for (const { o } of neighbors) {
             if (remaining <= 0.01) break
-            const shrink = Math.min(remaining, Math.max(0, o.width - 0.5))
+            const neighborDims = getMinimumDimensions(o.name)
+            const minShrinkableW = Math.max(0, o.width - neighborDims.minWidth - 0.1)
+            const shrink = Math.min(remaining, minShrinkableW)
+            if (shrink < 0.01) continue
             o.x += shrink
             o.width -= shrink
             remaining -= shrink
           }
-          room.width = targetW
-          changed = true
+          if (needed - remaining > 0.01) {
+            room.width = Math.round((room.width + (needed - remaining)) * 10) / 10
+            changedThisPass = true
+          }
         }
       }
       if (room.height < dims.minDepth - 0.01) {
@@ -70,30 +120,54 @@ function postProcessRooms(rooms: { id: string; name: string; x: number; y: numbe
           let remaining = needed
           for (const { o } of neighbors) {
             if (remaining <= 0.01) break
-            const shrink = Math.min(remaining, Math.max(0, o.height - 0.5))
+            const neighborDims = getMinimumDimensions(o.name)
+            const minShrinkableH = Math.max(0, o.height - neighborDims.minDepth - 0.1)
+            const shrink = Math.min(remaining, minShrinkableH)
+            if (shrink < 0.01) continue
             o.y += shrink
             o.height -= shrink
             remaining -= shrink
           }
-          room.height = targetH
-          changed = true
+          if (needed - remaining > 0.01) {
+            room.height = Math.round((room.height + (needed - remaining)) * 10) / 10
+            changedThisPass = true
+          }
         }
       }
     }
 
-    // 2. Fix extreme bedroom aspect ratios
+    // 2. Fix extreme aspect ratios for all room types (only when truly disproportionate)
     for (const room of result) {
-      if (room.name.startsWith('Bedroom') || room.name === 'Master Bedroom') {
-        const aspect = Math.max(room.width / room.height, room.height / room.width)
-        if (aspect > 3.0) {
-          if (room.width > room.height) room.width = Math.min(room.width, room.height * 2.5)
-          else room.height = Math.min(room.height, room.width * 2.5)
-          changed = true
+      const aspect = Math.max(room.width / room.height, room.height / room.width)
+      if (aspect > 4.0) {
+        const minDim = Math.min(room.width, room.height)
+        if (room.width > room.height) {
+          room.width = Math.max(minDim * 3.0, room.height * 3.0)
+        } else {
+          room.height = Math.max(minDim * 3.0, room.width * 3.0)
+        }
+        changedThisPass = true
+      }
+    }
+
+    // 3. Enforce minimum circulation width (1.2m corridors)
+    for (const room of result) {
+      if (room.name === 'Circulation' || room.name.toLowerCase().includes('corridor') || room.name.toLowerCase().includes('circulation')) {
+        if (room.width < 1.2 && room.height < 1.2) {
+          if (room.width <= room.height) room.width = 1.2
+          else room.height = 1.2
+          changedThisPass = true
+        } else if (room.width < 1.2) {
+          room.width = 1.2
+          changedThisPass = true
+        } else if (room.height < 1.2) {
+          room.height = 1.2
+          changedThisPass = true
         }
       }
     }
 
-    // 3. Resolve overlaps between non-circulation rooms
+    // 4. Resolve overlaps between non-circulation rooms
     for (let i = 0; i < result.length; i++) {
       for (let j = i + 1; j < result.length; j++) {
         const a = result[i], b = result[j]
@@ -108,12 +182,12 @@ function postProcessRooms(rooms: { id: string; name: string; x: number; y: numbe
             if (a.y < b.y) b.y = a.y + a.height
             else a.y = b.y + b.height
           }
-          changed = true
+          changedThisPass = true
         }
       }
     }
 
-    // 4. Clamp to footprint
+    // 5. Clamp to footprint
     for (const room of result) {
       if (room.x + room.width > fpW) room.width = Math.max(0.5, fpW - room.x)
       if (room.y + room.height > fpH) room.height = Math.max(0.5, fpH - room.y)
@@ -123,7 +197,7 @@ function postProcessRooms(rooms: { id: string; name: string; x: number; y: numbe
       room.height = snap05(Math.max(room.height, 0.5))
     }
 
-    if (!changed) break
+    if (!changedThisPass) break
   }
 
   return result
@@ -203,10 +277,13 @@ export function generatePlanModel(design: DesignOption): PlanModel {
   const area = design.grossFloorArea
   const buildingType = design.buildingType || 'house'
   const floors = Math.max(1, design.floors || 1)
-  const footprint = normalizeFootprint(area)
+  let footprint = normalizeFootprint(area)
   const wallThickness = 0.2
 
   const program = programFromArea(area, buildingType)
+
+  // Pre-generation feasibility gate: ensure footprint can fit all rooms at §5 minimums
+  footprint = ensureFeasibleFootprint(footprint, program)
 
   // Level programme profile for multi-storey buildings
   const levelProfile = floors > 1 ? computeLevelProgrammes(buildingType, floors) : null
@@ -271,12 +348,14 @@ export function generatePlanModel(design: DesignOption): PlanModel {
   }
 
   if (floors <= 1) {
-    // Single floor: retry with different seeds (→ different templates)
+    // Single floor: compliance-driven retry with up to 12 attempts
     let bestLayout: FloorLayoutResult | null = null
     let bestRejectedWarnings: string[] = []
+    let bestPlanModel: PlanModel | null = null
+    let bestViolationCount = Infinity
 
     const templates = listHouseTemplates(footprint.width * footprint.height)
-    for (let retry = 0; retry < Math.max(5, templates.length * 2); retry++) {
+    for (let retry = 0; retry < 12; retry++) {
       const baseSeed = Date.now()
       const templateOffset = retry < templates.length ? retry : (templates.length - 1 - (retry - templates.length))
       const seed = baseSeed + templateOffset * 7919 + retry * 5003
@@ -319,6 +398,27 @@ export function generatePlanModel(design: DesignOption): PlanModel {
         })
       }
 
+      // Compliance check: detect rooms below §5 minimum dimensions
+      if (result.plan && retry < 11) {
+        const violations = validatePlanCompliance(result.plan as PlanModel)
+        if (violations.length > 0) {
+          // Track worst violation count to find the best result so far
+          if (violations.length < bestViolationCount) {
+            bestViolationCount = violations.length
+            bestPlanModel = result.plan as PlanModel
+          }
+          // Expand minimum rooms in the next iteration by adjusting footprint slightly
+          footprint.width = Math.round((footprint.width + 0.3) * 10) / 10
+          footprint.height = Math.round((footprint.height + 0.3) * 10) / 10
+          continue
+        }
+      }
+
+      // Track best plan model for fallback
+      if (result.plan && !bestPlanModel) {
+        bestPlanModel = result.plan as PlanModel
+      }
+
       if (!result.rejected && layoutResult.valid !== false) {
         const planModel = result.plan as PlanModel
         if (layoutResult.entranceMarkers && layoutResult.entranceMarkers.length > 0) {
@@ -339,8 +439,14 @@ export function generatePlanModel(design: DesignOption): PlanModel {
       }
     }
 
-    // All retries rejected — use best attempt anyway, log clearly
-    if (import.meta.env.DEV) console.error(`[plan-generator] PLAN REJECTED after 3 retries: ${bestRejectedWarnings.filter(w => w.includes('LAYOUT_REJECTED') || w.includes('overlap detected')).join('; ')}`)
+    // All retries exhausted — use best plan model if available, otherwise fall back
+    if (import.meta.env.DEV) console.error(`[plan-generator] PLAN REJECTED after 12 retries: ${bestRejectedWarnings.filter(w => w.includes('LAYOUT_REJECTED') || w.includes('overlap detected')).join('; ')}`)
+    if (bestPlanModel) {
+      const plan = bestPlanModel
+      stampSpatialExtras(plan, bestLayout || { rooms: [], warnings: [], entranceMarkers: [] })
+      return plan
+    }
+
     const bestRooms = (bestLayout?.rooms || []).map(r => ({
       id: r.id,
       name: r.name,
@@ -576,61 +682,123 @@ export function generateVariedPlanModel(
   const variationSeed = seed ?? seedFromId(design.id)
   const area = design.grossFloorArea
   const buildingType = design.buildingType || 'house'
-  const footprint = normalizeFootprint(area)
-  const wallThickness = 0.2
+  const rawFootprint = normalizeFootprint(area)
   const program = programFromArea(area, buildingType)
 
-  const layoutResult = generateLayoutByTypology(
-    buildingType,
-    program,
-    footprint.width,
-    footprint.height,
-    variationSeed,
-  )
+  // Pre-generation feasibility gate
+  let footprint = ensureFeasibleFootprint(rawFootprint, program)
 
-  const rawRooms = layoutResult.rooms
+  const wallThickness = 0.2
 
-  const rooms = rawRooms.map(r => ({
-    id: r.id,
-    name: r.name,
-    x: snap05(r.x),
-    y: snap05(r.y),
-    width: snap05(Math.max(r.width, 0.5)),
-    height: snap05(Math.max(r.height, 0.5)),
-    color: ['#1d4ed8', '#0f766e', '#7c3aed', '#9a3412', '#0369a1', '#4d7c0f', '#be185d', '#b45309'][Math.abs(variationSeed) % 8],
-  }))
+  // Compliance-driven retry with up to 12 attempts
+  let bestPlanModel: PlanModel | null = null
+  let bestViolationCount = Infinity
+  let lastLayoutResult: FloorLayoutResult | null = null
+  let lastRawRooms: { id: string; name: string; x: number; y: number; width: number; height: number }[] = []
 
-  const result = assemblePlan({
-    rooms,
+  for (let retry = 0; retry < 12; retry++) {
+    const layoutResult = generateLayoutByTypology(
+      buildingType,
+      program,
+      footprint.width,
+      footprint.height,
+      variationSeed,
+    )
+    lastLayoutResult = layoutResult
+    const rawRooms = layoutResult.rooms
+    lastRawRooms = rawRooms
+
+    const rooms = rawRooms.map(r => ({
+      id: r.id,
+      name: r.name,
+      x: snap05(r.x),
+      y: snap05(r.y),
+      width: snap05(Math.max(r.width, 0.5)),
+      height: snap05(Math.max(r.height, 0.5)),
+      color: ['#1d4ed8', '#0f766e', '#7c3aed', '#9a3412', '#0369a1', '#4d7c0f', '#be185d', '#b45309'][Math.abs(variationSeed) % 8],
+    }))
+
+    let result = assemblePlan({
+      rooms,
+      width: footprint.width,
+      height: footprint.height,
+      wallThickness,
+      designOptionId: design.id,
+    })
+
+    if (result.plan) {
+      const plan = result.plan as PlanModel
+      const processed = postProcessRooms(plan.rooms.map(r => ({ ...r })), footprint.width, footprint.height)
+      result = assemblePlan({
+        rooms: processed,
+        width: footprint.width,
+        height: footprint.height,
+        wallThickness,
+        designOptionId: design.id,
+      })
+    }
+
+    // Compliance check
+    if (result.plan && retry < 11) {
+      const violations = validatePlanCompliance(result.plan as PlanModel)
+      if (violations.length > 0) {
+        if (violations.length < bestViolationCount) {
+          bestViolationCount = violations.length
+          bestPlanModel = result.plan as PlanModel
+        }
+        footprint.width = Math.round((footprint.width + 0.3) * 10) / 10
+        footprint.height = Math.round((footprint.height + 0.3) * 10) / 10
+        continue
+      }
+    }
+
+    if (result.plan && !bestPlanModel) {
+      bestPlanModel = result.plan as PlanModel
+    }
+
+    const { plan, warnings, rejected } = result
+    if (rejected && import.meta.env.DEV) {
+      console.error(`[plan-generator] generateVariedPlanModel PLAN REJECTED: ${warnings.filter(w => w.includes('LAYOUT_REJECTED') || w.includes('overlap detected')).join('; ')}`)
+    }
+
+    const planModel = plan as PlanModel
+    if (layoutResult.entranceMarkers && layoutResult.entranceMarkers.length > 0) {
+      planModel.entranceMarkers = layoutResult.entranceMarkers
+    }
+
+    stampSpatialExtras(planModel, layoutResult)
+
+    // Preserve canonical planSource
+    const planWithSource = rejected
+      ? { ...planModel, planSource: 'canonical-generated-plan-rejected' as PlanSource }
+      : planModel
+
+    const planWarnings = layoutResult.warnings || []
+    const allWarnings = [...warnings, ...planWarnings]
+    if (allWarnings.length > 0) {
+      if (import.meta.env.DEV) console.warn(`[plan-generator] generateVariedPlanModel: ${allWarnings.length} warnings:`, allWarnings.slice(0, 8))
+    }
+
+    if (!rejected) return planWithSource
+  }
+
+  // All retries exhausted — use best plan model
+  if (bestPlanModel) {
+    stampSpatialExtras(bestPlanModel, lastLayoutResult)
+    return bestPlanModel
+  }
+
+  // Ultimate fallback
+  const fallbackRooms = lastRawRooms.map(r => ({ ...r }))
+  const fallbackResult = assemblePlan({
+    rooms: fallbackRooms,
     width: footprint.width,
     height: footprint.height,
     wallThickness,
     designOptionId: design.id,
   })
-
-  const { plan, warnings, rejected } = result
-  if (rejected && import.meta.env.DEV) {
-    console.error(`[plan-generator] generateVariedPlanModel PLAN REJECTED: ${warnings.filter(w => w.includes('LAYOUT_REJECTED') || w.includes('overlap detected')).join('; ')}`)
-  }
-
-  const planModel = plan as PlanModel
-  // Add entrance markers if present
-  if (layoutResult.entranceMarkers && layoutResult.entranceMarkers.length > 0) {
-    planModel.entranceMarkers = layoutResult.entranceMarkers
-  }
-
-  stampSpatialExtras(planModel, layoutResult)
-
-  // Preserve canonical planSource (do NOT override to 'advanced-generated-plan')
-  const planWithSource = rejected
-    ? { ...planModel, planSource: 'canonical-generated-plan-rejected' as PlanSource }
-    : planModel
-
-  const planWarnings = layoutResult.warnings || []
-  const allWarnings = [...warnings, ...planWarnings]
-  if (allWarnings.length > 0) {
-    if (import.meta.env.DEV) console.warn(`[plan-generator] generateVariedPlanModel: ${allWarnings.length} warnings:`, allWarnings.slice(0, 8))
-  }
-
-  return planWithSource
+  const plan = fallbackResult.plan as PlanModel
+  plan.rooms = postProcessRooms(plan.rooms.map(r => ({ ...r })), footprint.width, footprint.height)
+  stampSpatialExtras(plan, lastLayoutResult)
+  return plan
 }

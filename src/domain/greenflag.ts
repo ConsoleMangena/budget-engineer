@@ -80,7 +80,7 @@ export interface TeamAssignment {
   createdAt: string;
 }
 
-export type ScoreTier = 'silver' | 'gold' | 'platinum';
+export type ScoreTier = 'platinum' | 'gold' | 'silver' | 'unrated';
 
 export interface ContractorScorecard {
   id: string;
