@@ -44,6 +44,15 @@ import { calculateTco } from '@/engine/ecosystem/tco';
 import { buildMarketIndex, FX_USD_TO_ZWG, type MarketRateLike } from '@/engine/ecosystem/priceIndex';
 import { gateP4pBid, lookupArchitect, validatePlanAgainstRegistry } from '@/engine/compliance/architectRegistry';
 import { logToolCall } from '@/lib/observability/telemetry';
+import { filterResources } from '@/engine/greenflag/resourceHub';
+import { matchContractor } from '@/engine/greenflag/teamAssembly';
+import { buildVettingScorecard } from '@/engine/greenflag/certification';
+import { buildCostBaseline } from '@/engine/greenflag/costBaseline';
+import { calculateTco as calculateTcoGf } from '@/engine/greenflag/bulkProcurement';
+import { valueEngineeringSuggestions } from '@/engine/greenflag/costClarification';
+import { computeCriticalPath } from '@/engine/sitehawk/criticalPath';
+import { createChangeOrder } from '@/engine/sitehawk/variationVault';
+import { calculateWipaaFromSnapshot } from '@/engine/sitehawk/wipaaMonitor';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -258,6 +267,74 @@ function route(name: ToolName, args: unknown, ctx: ToolExecutionContext): unknow
         deviation_threshold_pct: a.deviation_threshold_pct,
         recommendation: within ? 'GO' : 'NO-GO',
       };
+    }
+    case 'resource_hub_search': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['resource_hub_search']>;
+      const results = filterResources([], { role: a.role as never, locationLabel: a.region, minRating: a.min_rating, maxDistanceKm: a.max_distance_km, specialization: a.specialization });
+      return { count: results.length, results: results.slice(0, 10) };
+    }
+    case 'contractor_match': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['contractor_match']>;
+      const results = matchContractor([], { requiredRoles: a.required_roles, siteDistanceKm: a.site_distance_km });
+      return results;
+    }
+    case 'vetting_scorecard': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['vetting_scorecard']>;
+      const resource = {
+        id: a.resource_id, name: a.resource_id, type: 'sub-contractor' as const, role: 'general',
+        locationLabel: '', rating: 0, onTimeDeliveryPct: a.on_time_delivery_pct, defectRatePct: a.defect_rate_pct,
+        reliabilityScore: a.reliability_score, wipaaHealthPct: a.wipaa_health_pct, totalProjects: a.total_projects,
+        avgDelayDays: 0, specialization: [], locationGps: undefined, verifiedBadge: false,
+        creditScore: a.credit_score, servicesOffered: [],
+      };
+      return buildVettingScorecard(resource);
+    }
+    case 'cost_baseline_build': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['cost_baseline_build']>;
+      const items = a.line_items.map((li) => ({
+        wbsCode: li.wbs_code, description: li.description, quantity: li.quantity, unit: li.unit,
+        unitCostCents: li.unit_cost_cents, totalCostCents: Math.round(li.unit_cost_cents * li.quantity),
+        category: 'material' as const, deliveryStatus: li.delivery_status,
+      }));
+      return buildCostBaseline(a.project_id, items, a.contingency_pct);
+    }
+    case 'value_engineering': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['value_engineering']>;
+      const lines = [{ id: 'gen-1', projectId: a.project_id, lineIndex: 0, wbsCode: 'GEN', description: 'General works', quantity: 1, unit: 'ls', unitCostCents: a.current_cost_cents, totalCents: a.current_cost_cents, source: 'boq' as const }];
+      return { suggestions: valueEngineeringSuggestions(lines), targetSavingsPct: a.target_savings_pct };
+    }
+    case 'tco_compare': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['tco_compare']>;
+      const quotes = a.quotes.map((q) => ({
+        id: q.id, supplierId: q.supplier_name, supplierName: q.supplier_name,
+        unitPriceCents: q.unit_cost_cents, deliveryCostCents: q.freight_cents,
+        quantity: q.quantity, onTimeDeliveryPct: q.on_time_delivery_pct,
+        defectRatePct: q.defect_rate_pct, avgDelayDays: 0, leadTimeDays: q.lead_time_days,
+      }));
+      return calculateTcoGf(quotes, a.base_unit_cost_cents);
+    }
+    case 'critical_path_build': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['critical_path_build']>;
+      const tasks = a.tasks.map((t) => ({
+        id: t.id, name: t.name, phase: 'construction', startDate: '', endDate: '',
+        progressPct: 0, dependencies: t.dependencies, critical: false,
+      }));
+      const cp = computeCriticalPath(tasks);
+      return { totalDurationDays: cp.totalDurationDays, criticalPathIds: cp.criticalPathIds, tasks: cp.tasks.length };
+    }
+    case 'change_order_create': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['change_order_create']>;
+      return createChangeOrder(a.project_id, a.title, a.description, a.reason, a.quoted_cents);
+    }
+    case 'wipaa_snapshot': {
+      const a = args as z.infer<typeof TOOL_SCHEMAS['wipaa_snapshot']>;
+      const snapshot = {
+        id: `wip-${a.project_id}-${a.month}`, projectId: a.project_id, monthKey: a.month,
+        contractValueCents: a.contract_value_cents, costsIncurredCents: a.costs_incurred_cents,
+        totalEstimatedCostsCents: a.total_estimated_costs_cents, billedToDateCents: a.billed_to_date_cents,
+        computedAt: new Date().toISOString(), source: 'manual' as const,
+      };
+      return calculateWipaaFromSnapshot(snapshot);
     }
   }
 }

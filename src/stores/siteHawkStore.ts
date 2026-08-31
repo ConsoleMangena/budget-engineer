@@ -26,9 +26,8 @@ import type {
   BuildGuideMessageType,
   EscrowConcern,
 } from '@/domain/sitehawk';
-import { buildCriticalPath } from '@/engine/sitehawk/criticalPath';
+import { computeCriticalPath, type GanttTask } from '@/engine/sitehawk/criticalPath';
 import { createLogisticsRecord, advanceLogistics } from '@/engine/sitehawk/resourceScheduling';
-import { createTwinSnapshot, createVerificationReport } from '@/engine/sitehawk/digitalTwin';
 import {
   createEscrowMilestone,
   transitionEscrowMilestone,
@@ -39,7 +38,6 @@ import {
   createBuildGuideMessage,
   conciergeResponse,
 } from '@/engine/sitehawk/escrowTrigger';
-import { buildWipaaEntry } from '@/engine/sitehawk/wipaaMonitor';
 import { transitionPo as engineTransitionPo, transitionInvoice as engineTransitionInvoice } from '@/engine/sitehawk/realTimeJobCosting';
 
 interface SiteHawkState {
@@ -174,8 +172,31 @@ export const useSiteHawkStore = create<SiteHawkState>()(
         },
 
         saveSchedule: async (projectId, tasks) => {
-          const result = buildCriticalPath(tasks);
-          const schedule = result.schedule.map((s) => ({ ...s, projectId }));
+          const ganttTasks: GanttTask[] = tasks.map((t) => ({
+            id: t.id,
+            name: t.name,
+            wbsCode: t.wbsCode,
+            phase: t.wbsCode ?? 'planning',
+            startDate: new Date().toISOString().split('T')[0],
+            endDate: new Date(Date.now() + t.durationDays * 86_400_000).toISOString().split('T')[0],
+            progressPct: 0,
+            dependencies: t.predecessors,
+            critical: false,
+          }));
+          const result = computeCriticalPath(ganttTasks);
+          const schedule: ScheduleRecord[] = result.tasks.map((g) => ({
+            id: g.id,
+            projectId,
+            name: g.name,
+            wbsCode: g.wbsCode,
+            phase: g.phase,
+            startDate: g.startDate,
+            endDate: g.endDate,
+            durationDays: Math.round((new Date(g.endDate).getTime() - new Date(g.startDate).getTime()) / 86_400_000),
+            progressPct: g.progressPct,
+            dependencies: g.dependencies,
+            critical: g.critical,
+          }));
           await db.schedules.bulkPut(schedule);
           set((s) => { s.schedules = schedule; });
           return schedule;
@@ -204,8 +225,17 @@ export const useSiteHawkStore = create<SiteHawkState>()(
         addSnapshot: async (input) => {
           const projectId = get().currentProjectId;
           if (!projectId) return null;
-          const entry = createTwinSnapshot({ projectId, ...input });
-          if (!entry) return null;
+          const entry = {
+            id: `twin-${projectId}-${Date.now()}`,
+            projectId,
+            milestoneId: input.milestoneId ?? null,
+            geoLat: input.geoLat,
+            geoLng: input.geoLng,
+            note: input.note,
+            progressPct: input.progressPct,
+            is360: input.is360 ?? false,
+            capturedAt: new Date().toISOString(),
+          } as DigitalTwinTimelineEntry;
           await db.digitalTwinTimeline.put(entry);
           set((s) => { s.digitalTwinTimeline.push(entry); });
           return entry;
@@ -214,7 +244,16 @@ export const useSiteHawkStore = create<SiteHawkState>()(
         addVerification: async (input) => {
           const projectId = get().currentProjectId;
           if (!projectId) return null;
-          const report = createVerificationReport({ projectId, ...input });
+          const report = {
+            id: `ver-${projectId}-${Date.now()}`,
+            projectId,
+            milestoneId: input.milestoneId ?? null,
+            method: input.method,
+            verdict: input.verdict,
+            confidence: input.confidence,
+            details: input.details,
+            createdAt: new Date().toISOString(),
+          } as VerificationReport;
           await db.verificationReports.put(report);
           set((s) => { s.verificationReports.push(report); });
           return report;
@@ -249,10 +288,32 @@ export const useSiteHawkStore = create<SiteHawkState>()(
         addWipaaEntry: async (input) => {
           const projectId = get().currentProjectId;
           if (!projectId) return null;
-          const entry = buildWipaaEntry({ projectId, ...input });
+          const monthKey = input.monthKey;
+          const id = `wipaa-${projectId}-${monthKey}`;
+          const billed = input.billedCents;
+          const overUnder = input.overUnderBilledCents;
+          const escalationPct = billed > 0 ? Math.round(Math.abs(overUnder) / billed * 100) : 0;
+          let alertLevel: 'green' | 'amber' | 'red' = 'green';
+          if (escalationPct > 15) alertLevel = 'red';
+          else if (escalationPct > 5) alertLevel = 'amber';
+
+          const entry = {
+            id,
+            projectId,
+            monthKey,
+            billedCents: input.billedCents,
+            incurredCents: input.incurredCents,
+            revenueEarnedCents: input.revenueEarnedCents,
+            overUnderBilledCents: input.overUnderBilledCents,
+            status: input.status,
+            escalationPct,
+            alertLevel,
+            createdAt: new Date().toISOString(),
+          } as WipaaEntry;
+
           await db.wipaaEntries.put(entry);
           set((s) => {
-            const idx = s.wipaaEntries.findIndex((e) => e.monthKey === entry.monthKey);
+            const idx = s.wipaaEntries.findIndex((e) => e.monthKey === monthKey);
             if (idx >= 0) s.wipaaEntries[idx] = entry;
             else s.wipaaEntries.push(entry);
           });

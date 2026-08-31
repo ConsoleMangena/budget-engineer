@@ -1,16 +1,195 @@
-/**
- * C2 Team Assembly engine.
- * Three paths (Do it alone / Do it together / Do it for them), best-fit
- * contractor scoring (proximity 8km, specialization, availability, WIPAA
- * variance, true profitability, rating) and auto-generated contract terms.
- */
-import type {
-  AssemblyPath,
-  ContractorCandidate,
-  BestFitResult,
-  TeamAssignment,
-  MilestoneSplit,
-} from '@/domain/greenflag';
+import type { Resource } from './resourceHub';
+import type { ContractorCandidate, BestFitResult, TeamAssignment, MilestoneSplit, AssemblyPath } from '@/domain/greenflag';
+
+export type ServiceMode = 'do-it-together' | 'do-it-for-them' | 'do-it-alone';
+
+export type WizardStep = 'path' | 'team' | 'contract' | 'escrow';
+
+export interface BestFitOptions {
+  specialization?: string;
+  availableFrom?: string;
+}
+
+export interface TeamMember {
+  resourceId: string;
+  name: string;
+  role: string;
+  company?: string;
+  rating: number;
+  reliabilityPct: number;
+  wipaaHealthPct: number;
+  distanceKm?: number;
+  matchRationale: string[];
+  estimatedCostCents: number;
+  availableDate: string;
+  approved: boolean;
+}
+
+export interface TeamAssembly {
+  projectId: string;
+  serviceMode: ServiceMode;
+  members: TeamMember[];
+  totalEstimatedCents: number;
+  assembledAt: string;
+  contractGenerated: boolean;
+}
+
+export interface MatchCriteria {
+  siteDistanceKm?: number;
+  projectType?: string;
+  budgetRangeCents?: { min: number; max: number };
+  requiredRoles: string[];
+}
+
+export function matchContractor(
+  resources: Resource[],
+  criteria: MatchCriteria,
+  topK = 3,
+): { resource: Resource; score: number; rationale: string[] }[] {
+  const candidates = resources.filter((r) => {
+    if (r.type === 'supplier') return false;
+    if (criteria.requiredRoles.length > 0 && !criteria.requiredRoles.some((role) => r.type.includes(role) || r.role.includes(role))) return false;
+    return true;
+  });
+
+  const scored = candidates.map((r) => {
+    const rationale: string[] = [];
+    let score = 0;
+
+    if (r.rating >= 4.5) { score += 30; rationale.push(`${r.rating}★ rating`); }
+    if (r.onTimeDeliveryPct >= 95) { score += 25; rationale.push(`${r.onTimeDeliveryPct}% on-time delivery`); }
+    if (r.wipaaHealthPct >= 85) { score += 20; rationale.push(`${r.wipaaHealthPct}% WIPAA health — financially healthy`); }
+
+    if (criteria.siteDistanceKm && r.locationGps) {
+      const dist = criteria.siteDistanceKm;
+      if (dist <= 8) { score += 15; rationale.push(`${dist}km from site — fast mobilization`); }
+      else if (dist <= 20) { score += 8; rationale.push(`${dist}km from site`); }
+    }
+
+    if (criteria.projectType && r.specialization.some((s) => s.toLowerCase().includes(criteria.projectType!.toLowerCase()))) {
+      score += 10;
+      rationale.push(`${r.totalProjects} similar projects completed`);
+    }
+
+    return { resource: r, score, rationale };
+  });
+
+  return scored.sort((a, b) => b.score - a.score).slice(0, topK);
+}
+
+export function buildTeamAssembly(
+  projectId: string,
+  serviceMode: ServiceMode,
+  matchedResources: { resource: Resource; score: number; rationale: string[] }[],
+  estimatedCosts: Map<string, number>,
+  availableDate: string,
+): TeamAssembly {
+  const members: TeamMember[] = matchedResources.map(({ resource, rationale }) => ({
+    resourceId: resource.id,
+    name: resource.name,
+    role: resource.role,
+    company: resource.company,
+    rating: resource.rating,
+    reliabilityPct: resource.onTimeDeliveryPct,
+    wipaaHealthPct: resource.wipaaHealthPct,
+    matchRationale: rationale,
+    estimatedCostCents: estimatedCosts.get(resource.id) ?? 0,
+    availableDate: resource.availableFrom ?? availableDate,
+    approved: false,
+  }));
+
+  return {
+    projectId,
+    serviceMode,
+    members,
+    totalEstimatedCents: members.reduce((sum, m) => sum + m.estimatedCostCents, 0),
+    assembledAt: new Date().toISOString(),
+    contractGenerated: false,
+  };
+}
+
+export function generateContractTerms(team: TeamAssembly): {
+  clauses: string[];
+  paymentSchedule: { milestone: string; pct: number; amountCents: number }[];
+  riskClauses: string[];
+} {
+  const paymentSchedule = [
+    { milestone: 'Foundation & Bones', pct: 35, amountCents: Math.round(team.totalEstimatedCents * 0.35) },
+    { milestone: 'Wall Plate & Shell', pct: 40, amountCents: Math.round(team.totalEstimatedCents * 0.40) },
+    { milestone: 'Finishes & Keys', pct: 25, amountCents: Math.round(team.totalEstimatedCents * 0.25) },
+  ];
+
+  return {
+    clauses: [
+      'Price Acceleration Clause: Materials cost adjustments tied to SADC Market Price Index',
+      'Currency Clause: Payments in USD or ZiG at prevailing interbank rate on payment date',
+      'Force Majeure: Neither party liable for delays caused by events beyond reasonable control',
+      'Dispute Resolution: DzeNhare Concierge mediation before arbitration',
+    ],
+    paymentSchedule,
+    riskClauses: [
+      'Contractor WIPAA health monitored monthly — amber alert at <85%, red intervention at <70%',
+      'No verbal change orders — all variations through Variation Vault',
+      'Escrow-gated payments — released only upon Digital Twin verification',
+    ],
+  };
+}
+
+/* --------------------------------------------------------------------------
+ * C2 Team Assembly layer
+ * ------------------------------------------------------------------------ */
+
+export const MATERIALS_TRANSPARENCY = {
+  label: 'Materials Transparency',
+  description: 'Real-time material pricing and supplier verification',
+};
+
+export function money(cents: number): string {
+  return new Intl.NumberFormat('en-ZW', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(cents / 100);
+}
+
+export const MATERIALS_TOTAL_CENTS = 1_000_000;
+
+export const FORTRESS_FEE_RANGE_PCT = { min: 12, max: 15 };
+
+export const FORCE_MAJEURE_CLAUSE = 'Force Majeure: Neither party liable for delays caused by events beyond reasonable control';
+
+export const ACCELERATED_TIERS = [
+  { tier: 'Bronze', minProjects: 1, discount: 0 },
+  { tier: 'Silver', minProjects: 5, discount: 2 },
+  { tier: 'Gold', minProjects: 15, discount: 5 },
+  { tier: 'Platinum', minProjects: 30, discount: 8 },
+];
+
+export const WIZARD_STEPS = [
+  { id: 'path', label: 'Assembly Path', description: 'Choose how you want to build' },
+  { id: 'team', label: 'Team', description: 'Match with verified contractors' },
+  { id: 'contract', label: 'Contract', description: 'Review and sign agreement' },
+  { id: 'escrow', label: 'Escrow', description: 'Set up payment milestones' },
+];
+
+export const ASSEMBLY_PATHS: Array<{ id: AssemblyPath; includes: string[]; description: string }> = [
+  {
+    id: 'alone',
+    includes: ['P4P Calculator', 'WIPAA Monitor', 'Red Pen Audit $50', 'Ghost Materials', 'Group Buy Aggregator', 'My Must-Haves'],
+    description: 'Builder self-executes with DzeNhare toolbelt',
+  },
+  {
+    id: 'together',
+    includes: ['P4P Calculator', 'WIPAA Monitor', 'Red Pen Audit $50', 'Ghost Materials', 'Group Buy Aggregator', 'My Must-Haves', 'Contractor Match', 'Escrow Vault'],
+    description: 'Builder + Contractor co-manage',
+  },
+  {
+    id: 'for-them',
+    includes: ['P4P Calculator', 'WIPAA Monitor', 'Red Pen Audit $50', 'Ghost Materials', 'Group Buy Aggregator', 'My Must-Haves', 'Contractor Match', 'Escrow Vault', 'Full Turnkey 12-15% margin', '45 minutes onboarding'],
+    description: 'DzeNhare Fortress turnkey — we manage everything',
+  },
+];
 
 export const MILESTONE_SPLIT: MilestoneSplit[] = [
   { name: 'Foundation & Bones', pct: 35 },
@@ -18,217 +197,144 @@ export const MILESTONE_SPLIT: MilestoneSplit[] = [
   { name: 'Finishes & Keys', pct: 25 },
 ];
 
-export const FORTRESS_FEE_RANGE_PCT = { min: 12, max: 15 };
-
-export interface BestFitOptions {
-  specialization: string;
-  availableFrom: string;
-  /** Distance cap in km — canonical 8km. */
-  maxDistanceKm?: number;
-}
-
-export interface PathDefinition {
-  id: AssemblyPath;
-  label: string;
-  description: string;
-  includes: string[];
-}
-
-export const ASSEMBLY_PATHS: PathDefinition[] = [
-  {
-    id: 'alone',
-    label: 'Do it alone',
-    description: 'You orchestrate; DzeNhare equips you with the full toolbelt.',
-    includes: ['P4P Calculator', 'WIPAA Monitor', 'Red Pen Audit $50', 'Ghost Materials', 'Group Buy Aggregator', 'My Must-Haves'],
-  },
-  {
-    id: 'together',
-    label: 'Do it together',
-    description: 'Best-fit contractor auto-assigned from the Green Flag Guild.',
-    includes: ['Best-fit contractor match', 'Contract auto-generated', 'Materials transparency'],
-  },
-  {
-    id: 'for-them',
-    label: 'Do it for them',
-    description: 'Fortress turnkey — DzeNhare orchestrates the invisible workstreams.',
-    includes: ['Fortress 12-15% turnkey', '10-12 clicks, ~45 minutes', 'Invisible workstream orchestration'],
-  },
-];
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, v));
-}
-
-/**
- * Deterministic best-fit scoring. Weights: proximity 8km (25), specialization
- * (20), availability (15), WIPAA variance (15), true profitability (15),
- * rating (10) → max 100.
- */
 export function bestFitContractor(
   candidates: ContractorCandidate[],
-  opts: BestFitOptions,
+  criteria: { specialization?: string; availableFrom?: string },
 ): BestFitResult | null {
-  if (candidates.length === 0) return null;
-  const maxDistance = opts.maxDistanceKm ?? 8;
-  let best: BestFitResult | null = null;
-  for (const candidate of candidates) {
+  if (!candidates || candidates.length === 0) return null;
+
+  const scored = candidates.map((c) => {
     const reasons: string[] = [];
     let score = 0;
 
-    if (candidate.distanceKm <= maxDistance) {
+    // Specialization match (max 25)
+    if (criteria.specialization && c.specialization?.toLowerCase().includes(criteria.specialization.toLowerCase())) {
       score += 25;
-      reasons.push(`${candidate.distanceKm}km — within the ${maxDistance}km radius`);
-    } else {
-      score += clamp(25 - (candidate.distanceKm - maxDistance) * 2, 0, 25);
+      reasons.push(`${c.specialization} specialist`);
     }
 
-    if (candidate.specialization.toLowerCase().includes(opts.specialization.toLowerCase())) {
+    // Rating (max 20)
+    if (c.rating >= 4.5) {
       score += 20;
-      reasons.push(`Specializes in ${opts.specialization}`);
-    }
-
-    if (candidate.availableFrom <= opts.availableFrom) {
+      reasons.push(`Rated ${c.rating}★ (${c.reviews} reviews)`);
+    } else if (c.rating >= 4.0) {
       score += 15;
-      reasons.push(`Available from ${candidate.availableFrom}`);
+      reasons.push(`Rated ${c.rating}★ (${c.reviews} reviews)`);
+    } else if (c.rating >= 3.5) {
+      score += 10;
     }
 
-    const wipaa = clamp(candidate.wipaaPct, 0, 100);
-    score += Math.round(15 * (wipaa / 100));
-    if (wipaa >= 90) reasons.push(`WIPAA variance ${wipaa}%`);
-
-    const profit = clamp(candidate.trueProfitabilityPct, 0, 100);
-    score += Math.round(15 * (profit / 100));
-    if (profit >= 12) reasons.push(`True profitability ${profit}%`);
-
-    score += Math.round(10 * (clamp(candidate.rating, 0, 5) / 5));
-    if (candidate.rating >= 4.8) reasons.push(`Rated ${candidate.rating}★ (${candidate.reviews} reviews)`);
-
-    if (!best || score > best.score) {
-      best = { candidate, score: Math.min(score, 100), reasons };
+    // Distance (11 points for <=8km, 8 for <=20km, 3 for <=50km)
+    if (c.distanceKm <= 8) {
+      score += 11;
+      reasons.push(`${c.distanceKm}km — within the 8km radius`);
+    } else if (c.distanceKm <= 20) {
+      score += 8;
+      reasons.push(`${c.distanceKm}km from site`);
+    } else if (c.distanceKm <= 50) {
+      score += 3;
     }
-  }
-  return best;
+
+    // WIPAA health (15 points for >=90, 10 for >=80, 5 for >=70)
+    if (c.wipaaPct >= 90) {
+      score += 15;
+      reasons.push(`WIPAA variance ${c.wipaaPct}%`);
+    } else if (c.wipaaPct >= 80) {
+      score += 10;
+      reasons.push(`WIPAA variance ${c.wipaaPct}%`);
+    } else if (c.wipaaPct >= 70) {
+      score += 5;
+    }
+
+    // Availability bonus
+    if (criteria.availableFrom && c.availableFrom && new Date(c.availableFrom) <= new Date(criteria.availableFrom)) {
+      score += 5;
+      reasons.push('Available on or before project start');
+    }
+
+    // Project count bonus (10 for >=20, 5 for >=10)
+    if (c.projectCount >= 20) {
+      score += 10;
+    } else if (c.projectCount >= 10) {
+      score += 5;
+    }
+
+    return { candidate: c, score, reasons };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  if (!best || best.score < 30) return null;
+
+  return { candidate: best.candidate, score: best.score, reasons: best.reasons };
 }
 
-export interface ContractOptions {
+export interface GenerateContractInput {
   projectId: string;
   path: AssemblyPath;
-  ownerName: string;
-  projectName: string;
   contractor: ContractorCandidate | null;
-  totalCents: number;
-  now?: Date;
+  totalEstimatedCents: number;
 }
 
-export interface GeneratedContract {
+export interface GenerateContractResult {
   assignment: TeamAssignment;
-  contractRef: string;
   terms: string[];
 }
 
 /**
- * Auto-generate the contract terms for the selected path. Contract ref
- * follows the DZ-YYYYMMDD-N format. Milestones split 35/40/25.
+ * Generates a contract with DZ-YYYYMMDD-NNN reference.
+ * For 'for-them' path, terms include '12-15%' margin note.
  */
-export function generateContract(opts: ContractOptions): GeneratedContract {
-  const now = opts.now ?? new Date();
-  const contractRef = `DZ-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${(opts.totalCents % 90) + 10}`;
-  const terms: string[] = [
-    `Contract value ${money(opts.totalCents)} on the locked cost baseline.`,
-    `Milestone split: ${MILESTONE_SPLIT.map((m) => `${m.name} ${m.pct}%`).join(' · ')}.`,
-    'Payments release from escrow only after Site Hawk digital-twin verification (P3/P4).',
-    'Variations require the Variation Vault protocol; verbal change orders are not honoured (P5).',
-  ];
-  if (opts.path === 'for-them') {
-    terms.push(`Fortress turnkey fee ${FORTRESS_FEE_RANGE_PCT.min}-${FORTRESS_FEE_RANGE_PCT.max}% — DzeNhare orchestrates all workstreams.`);
-  } else if (opts.path === 'together' && opts.contractor) {
-    terms.push(`Contractor: ${opts.contractor.name} (${opts.contractor.specialization}, ${opts.contractor.rating}★).`);
-    terms.push('Retention: 10% per milestone, released at practical completion (P6 handover).');
+export function generateContract(input: GenerateContractInput): GenerateContractResult {
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const seq = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  const contractRef = `DZ-${dateStr}-${seq}`;
+
+  const terms: string[] = [];
+
+  // Header terms
+  terms.push(`Contract Reference: ${contractRef}`);
+  terms.push(`Project: ${input.projectId}`);
+  terms.push(`Assembly Path: ${input.path}`);
+
+  if (input.contractor) {
+    terms.push(`Contractor: ${input.contractor.name} (${input.contractor.id})`);
+    terms.push(`Specialization: ${input.contractor.specialization}`);
+    terms.push(`Rating: ${input.contractor.rating}★ (${input.contractor.reviews} reviews)`);
+    terms.push(`Distance: ${input.contractor.distanceKm}km`);
+    terms.push(`WIPAA Variance: ${input.contractor.wipaaPct}%`);
+  } else {
+    terms.push('Contractor: ASSIGNED BY DZENHARE CONCIERGE (12-15% margin)');
   }
+
+  // Milestone terms
+  terms.push('Milestone Split:');
+  for (const ms of MILESTONE_SPLIT) {
+    const amount = Math.round(input.totalEstimatedCents * ms.pct / 100);
+    terms.push(`  ${ms.name}: ${ms.pct}% (${Math.round(amount / 100).toLocaleString()} USD)`);
+  }
+
+  // Standard terms
+  terms.push('Retention: 10% held until Final Completion Certificate');
+  terms.push('Price Acceleration: Tied to SADC Market Price Index');
+  terms.push('Currency: Payments in USD or ZiG at prevailing interbank rate');
+  terms.push('Force Majeure: Neither party liable for delays beyond reasonable control');
+  terms.push('Dispute Resolution: DzeNhare Concierge mediation before arbitration');
+  terms.push('WIPAA Monitoring: Monthly — amber <85%, red intervention <70%');
+  terms.push('No verbal change orders — all variations through Variation Vault');
+  terms.push('Escrow-gated payments — released only upon Digital Twin verification');
+
   const assignment: TeamAssignment = {
-    id: `ta-${projectSlug(opts.projectId)}-${contractRef}`,
-    projectId: opts.projectId,
-    path: opts.path,
-    contractorId: opts.contractor?.id ?? null,
-    contractorName: opts.contractor?.name ?? null,
+    id: `ta-${input.projectId}-${seq}`,
+    projectId: input.projectId,
+    path: input.path,
+    contractorId: input.contractor?.id ?? null,
+    contractorName: input.contractor?.name ?? null,
     milestoneSplit: MILESTONE_SPLIT,
     contractRef,
     terms,
-    createdAt: now.toISOString(),
+    createdAt: new Date().toISOString(),
   };
-  return { assignment, contractRef, terms };
+
+  return { assignment, terms };
 }
-
-function projectSlug(id: string): string {
-  return id.replace(/[^a-z0-9]/gi, '').slice(-8).toLowerCase();
-}
-
-export function money(cents: number): string {
-  return `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-}
-
-// ---------------------------------------------------------------------------
-// Materials Transparency — canonical SADC supplier list
-// ---------------------------------------------------------------------------
-
-export interface MaterialTransparencyLine {
-  id: string;
-  name: string;
-  supplier: string;
-  totalCents: number;
-  qty: string;
-}
-
-export const MATERIALS_TRANSPARENCY: MaterialTransparencyLine[] = [
-  { id: 'mat-bricks', name: 'Face Bricks (standard)', supplier: 'Willdale Brickworks', totalCents: 4_200_00, qty: '4,200 units' },
-  { id: 'mat-cement', name: 'Portland Cement 50kg', supplier: 'Sino Cement', totalCents: 3_800_00, qty: '200 bags' },
-  { id: 'mat-windows', name: 'Aluminium Windows', supplier: 'PG Glass Zimbabwe', totalCents: 2_100_00, qty: '8 windows' },
-  { id: 'mat-doors', name: 'Panel Doors (internal)', supplier: 'Davis Doors', totalCents: 1_400_00, qty: '12 doors' },
-];
-
-export const MATERIALS_TOTAL_CENTS = MATERIALS_TRANSPARENCY.reduce((sum, m) => sum + m.totalCents, 0);
-
-// ---------------------------------------------------------------------------
-// Force Majeure — standard contract clause
-// ---------------------------------------------------------------------------
-
-export const FORCE_MAJEURE_CLAUSE =
-  'Neither party shall be liable for failure to perform due to events beyond reasonable control ' +
-  '(including but not limited to natural disasters, government-imposed restrictions, pandemic lockdowns, ' +
-  'labor strikes, or material supply-chain disruptions exceeding 30 days). The affected party must notify ' +
-  'the other within 72 hours. Performance shall resume within 14 days of the force majeure event ceasing.';
-
-// ---------------------------------------------------------------------------
-// Accelerated pricing — tiered fee structure for "Do it together"
-// ---------------------------------------------------------------------------
-
-export interface AcceleratedTier {
-  label: string;
-  feePct: number;
-  description: string;
-}
-
-export const ACCELERATED_TIERS: AcceleratedTier[] = [
-  { label: 'Standard', feePct: 12, description: '12% project management fee — 3-5 day contractor matching' },
-  { label: 'Express', feePct: 15, description: '15% priority matching — 24-hour contractor deployment' },
-  { label: 'Fortress', feePct: 15, description: '15% turnkey — DzeNhare orchestrates all workstreams' },
-];
-
-// ---------------------------------------------------------------------------
-// Wizard step definitions
-// ---------------------------------------------------------------------------
-
-export type WizardStep = 'plan' | 'pick' | 'build' | 'move-in';
-
-export interface WizardStepDef {
-  id: WizardStep;
-  label: string;
-  description: string;
-}
-
-export const WIZARD_STEPS: WizardStepDef[] = [
-  { id: 'plan', label: 'Plan', description: 'Choose your assembly path' },
-  { id: 'pick', label: 'Pick', description: 'Match your contractor' },
-  { id: 'build', label: 'Build', description: 'Materials & contract' },
-  { id: 'move-in', label: 'Move In', description: 'Team locked' },
-];

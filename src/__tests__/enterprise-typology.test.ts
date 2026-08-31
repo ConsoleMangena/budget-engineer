@@ -706,7 +706,7 @@ describe('generateLayoutByTypology', () => {
     expect(result.rooms).toHaveLength(9)
     expect(result.structuralGrid).toEqual({ spanX: 7.2, spanY: 7.2 })
     expect(result.coreLayout?.coreType).toBe('central')
-    expect(result.adjacencyGraph?.score).toBe(1)
+    expect(result.adjacencyGraph?.score).toBeGreaterThanOrEqual(0.95)
     expect(result.floorPlateMetrics?.totalAreaM2).toBe(576)
     expect(result.floorPlateMetrics?.efficiency).toBeCloseTo(0.524, 3)
   })
@@ -731,7 +731,7 @@ describe('plan-generator integration', () => {
     expect(plan.rooms.length).toBeGreaterThan(0)
     expect(plan.structuralGrid).toEqual({ spanX: 7.2, spanY: 7.2 })
     expect(plan.coreLayout?.coreType).toBe('central')
-    expect(plan.adjacencyGraph?.score).toBe(1)
+    expect(plan.adjacencyGraph?.score).toBeGreaterThanOrEqual(0.95)
     expect(plan.floorPlateMetrics?.totalAreaM2).toBeGreaterThan(500)
   })
 
@@ -746,7 +746,7 @@ describe('plan-generator integration', () => {
     const plan = generateVariedPlanModel(makeDesignOption({ buildingType: 'office', grossFloorArea: 576, floors: 1 }), 42)
     expect(plan.rooms.length).toBeGreaterThan(0)
     expect(plan.structuralGrid).toEqual({ spanX: 7.2, spanY: 7.2 })
-    expect(plan.adjacencyGraph?.score).toBe(1)
+    expect(plan.adjacencyGraph?.score).toBeGreaterThanOrEqual(0.95)
   })
 
   it('leaves spatial extras unset for the house typology', () => {

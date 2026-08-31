@@ -117,6 +117,116 @@ export const gonoGoDecisionSchema = z
   })
   .strict();
 
+// ——— Green Flag Guild C1-C5 ———
+
+export const resourceHubSearchSchema = z
+  .object({
+    role: z.enum(['architect', 'qs', 'engineer', 'contractor', 'subcontractor']).optional(),
+    region: z.string().min(1).optional(),
+    min_rating: z.number().min(0).max(5).optional(),
+    max_distance_km: z.number().positive().optional(),
+    specialization: z.string().optional(),
+  })
+  .strict();
+
+export const contractorMatchSchema = z
+  .object({
+    required_roles: z.array(z.string().min(1)).min(1),
+    site_distance_km: z.number().nonnegative().optional().default(20),
+    min_wipaa_health_pct: z.number().min(0).max(100).optional().default(80),
+  })
+  .strict();
+
+export const vettingScorecardSchema = z
+  .object({
+    resource_id: z.string().min(1),
+    on_time_delivery_pct: z.number().min(0).max(100),
+    defect_rate_pct: z.number().min(0).max(100),
+    reliability_score: z.number().min(0).max(100),
+    wipaa_health_pct: z.number().min(0).max(100),
+    total_projects: z.number().nonnegative(),
+    credit_score: z.number().nonnegative(),
+  })
+  .strict();
+
+export const costBaselineBuildSchema = z
+  .object({
+    project_id: z.string().min(1),
+    total_budget_cents: z.number().positive(),
+    contingency_pct: z.number().min(0).max(30).default(10),
+    line_items: z.array(z.object({
+      wbs_code: z.string().min(1),
+      description: z.string().min(1),
+      quantity: z.number().positive(),
+      unit: z.string().min(1),
+      unit_cost_cents: z.number().positive(),
+      delivery_status: z.enum(['pending', 'ordered', 'delivered', 'installed']).default('pending'),
+    })).min(1),
+  })
+  .strict();
+
+export const valueEngineeringSchema = z
+  .object({
+    project_id: z.string().min(1),
+    current_cost_cents: z.number().positive(),
+    target_savings_pct: z.number().min(0).max(50).optional().default(5),
+  })
+  .strict();
+
+export const tcoCompareSchema = z
+  .object({
+    quotes: z.array(z.object({
+      id: z.string().min(1),
+      supplier_name: z.string().min(1),
+      unit_cost_cents: z.number().nonnegative(),
+      quantity: z.number().positive(),
+      freight_cents: z.number().nonnegative().default(0),
+      lead_time_days: z.number().nonnegative(),
+      on_time_delivery_pct: z.number().min(0).max(100),
+      defect_rate_pct: z.number().min(0).max(100),
+    })).min(1),
+    base_unit_cost_cents: z.number().positive(),
+  })
+  .strict();
+
+// ——— Site Hawk P1-P6 ———
+
+export const criticalPathBuildSchema = z
+  .object({
+    project_id: z.string().min(1),
+    tasks: z.array(z.object({
+      id: z.string().min(1),
+      name: z.string().min(1),
+      duration_days: z.number().positive(),
+      dependencies: z.array(z.string()).default([]),
+      earliest_start: z.number().nonnegative().default(0),
+      resource_required: z.string().optional(),
+    })).min(1),
+    project_deadline_days: z.number().positive().optional(),
+  })
+  .strict();
+
+export const changeOrderCreateSchema = z
+  .object({
+    project_id: z.string().min(1),
+    title: z.string().min(1),
+    description: z.string().min(1),
+    reason: z.enum(['owner-request', 'site-variation', 'regulation', 'error', 'other']),
+    quoted_cents: z.number().positive(),
+  })
+  .strict();
+
+export const wipaaSnapshotSchema = z
+  .object({
+    project_id: z.string().min(1),
+    month: z.string().regex(/^\d{4}-\d{2}$/),
+    contract_value_cents: z.number().positive(),
+    costs_incurred_cents: z.number().nonnegative(),
+    total_estimated_costs_cents: z.number().positive(),
+    billed_to_date_cents: z.number().nonnegative(),
+  })
+  .strict();
+
 /** Registry of every tool name → its input schema. */
 export const TOOL_SCHEMAS = {
   query_blaws: queryBlawsSchema,
@@ -131,6 +241,15 @@ export const TOOL_SCHEMAS = {
   p4p_calculator: p4pCalculatorSchema,
   wipaa_calculator: wipaaCalculatorSchema,
   gono_go_decision: gonoGoDecisionSchema,
+  resource_hub_search: resourceHubSearchSchema,
+  contractor_match: contractorMatchSchema,
+  vetting_scorecard: vettingScorecardSchema,
+  cost_baseline_build: costBaselineBuildSchema,
+  value_engineering: valueEngineeringSchema,
+  tco_compare: tcoCompareSchema,
+  critical_path_build: criticalPathBuildSchema,
+  change_order_create: changeOrderCreateSchema,
+  wipaa_snapshot: wipaaSnapshotSchema,
 } as const;
 
 export type ToolName = keyof typeof TOOL_SCHEMAS;
@@ -155,11 +274,20 @@ export const TOOLS: ToolDefinition[] = [
   { name: 'query_si56', description: 'SI 56/2025 ACZ-registration gate — check whether a plan is validated by a registered professional. Read-only.', type: 'read', category: 'regulation', schema: querySi56Schema },
   { name: 'query_market_index', description: 'Query the SADC market price index (cement, steel, brick) in USD or ZWG. Read-only.', type: 'read', category: 'material', schema: queryMarketIndexSchema },
   { name: 'search_codes', description: 'General hybrid search over the building-code RAG index (any jurisdiction, optional doc filter). Read-only.', type: 'read', category: 'regulation', schema: searchCodesSchema },
+  { name: 'resource_hub_search', description: 'Search the Green Flag Guild resource hub by role, region, rating and distance. Read-only.', type: 'read', category: 'material', schema: resourceHubSearchSchema },
+  { name: 'contractor_match', description: 'Rank contractors by WIPAA health, distance and reliability. Read-only.', type: 'read', category: 'measurement', schema: contractorMatchSchema },
   { name: 'calculate_brick_quantity', description: 'Math only — brick count from length, height, thickness units, bond type and wastage.', type: 'write', category: 'math', schema: calculateBrickQuantitySchema },
   { name: 'calculate_concrete_volume', description: 'Math only — concrete volume (m³) from length, width and depth.', type: 'write', category: 'math', schema: calculateConcreteVolumeSchema },
   { name: 'calculate_tco', description: 'Math only — total cost of ownership incl. freight and risk-weighted defect cost.', type: 'write', category: 'math', schema: calculateTcoSchema },
   { name: 'p4p_calculator', description: 'Math only — payment-for-progress certificate from direct costs, overhead % and desired margin %.', type: 'write', category: 'payment', schema: p4pCalculatorSchema },
   { name: 'wipaa_calculator', description: 'Math only — WIPAA revenue recognition for a project/month from work certified vs cash requested.', type: 'write', category: 'payment', schema: wipaaCalculatorSchema },
+  { name: 'tco_compare', description: 'Math only — rank multiple supplier quotes by TCO with reliability and defect weighting.', type: 'write', category: 'math', schema: tcoCompareSchema },
+  { name: 'vetting_scorecard', description: 'Math only — compute a contractor vetting score from delivery, defect, reliability, WIPAA and credit metrics.', type: 'write', category: 'math', schema: vettingScorecardSchema },
+  { name: 'cost_baseline_build', description: 'Write — build a cost baseline from BOQ line items with contingency allocation.', type: 'write', category: 'measurement', schema: costBaselineBuildSchema },
+  { name: 'value_engineering', description: 'Write — generate value engineering suggestions to meet a target savings percentage.', type: 'write', category: 'measurement', schema: valueEngineeringSchema },
+  { name: 'critical_path_build', description: 'Write — compute critical path from a task network with dependencies and project deadline.', type: 'write', category: 'measurement', schema: criticalPathBuildSchema },
+  { name: 'change_order_create', description: 'Write — create a change order in the variation vault with a reversal-penalty tracker.', type: 'write', category: 'payment', schema: changeOrderCreateSchema },
+  { name: 'wipaa_snapshot', description: 'Write — compute a WIPAA snapshot for a project month with solvency check.', type: 'write', category: 'payment', schema: wipaaSnapshotSchema },
   { name: 'gono_go_decision', description: 'Orchestrator decision — compare an estimate against a historical baseline and produce a GO / NO-GO recommendation with deviation %. Supervisor-only.', type: 'decision', category: 'math', schema: gonoGoDecisionSchema },
 ];
 
@@ -177,6 +305,15 @@ export const AGENT_TOOL_SCOPES: Record<AgentRole, readonly ToolName[]> = {
   validator: READ_TOOLS,
   calculator: WRITE_TOOLS,
   supervisor: DECISION_TOOLS,
+};
+
+// Extended roles for Green Flag / Site Hawk workflows
+export type ExtendedRole = AgentRole | 'green-flag' | 'site-hawk';
+
+export const EXTENDED_TOOL_SCOPES: Record<ExtendedRole, readonly ToolName[]> = {
+  ...AGENT_TOOL_SCOPES,
+  'green-flag': ['resource_hub_search', 'contractor_match', 'vetting_scorecard', 'cost_baseline_build', 'value_engineering', 'tco_compare', 'p4p_calculator', 'wipaa_calculator', 'calculate_brick_quantity', 'calculate_concrete_volume', 'calculate_tco', 'query_blaws', 'query_saz', 'query_ziqs', 'query_market_index', 'search_codes'],
+  'site-hawk': ['critical_path_build', 'change_order_create', 'wipaa_snapshot', 'wipaa_calculator', 'p4p_calculator', 'calculate_brick_quantity', 'calculate_concrete_volume', 'query_market_index', 'search_codes', 'resource_hub_search'],
 };
 
 export function toolsForRole(role: AgentRole): readonly ToolName[] {

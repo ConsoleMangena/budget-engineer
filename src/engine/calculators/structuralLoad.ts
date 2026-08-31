@@ -8,6 +8,13 @@ export interface StructuralLoadInput {
   floors?: number
   windLoadKnm2?: number
   seismicFactor?: number
+  wallLengthM?: number
+  wallHeightM?: number
+  wallThicknessM?: number
+  brickDensityKgM3?: number
+  wallCount?: number
+  spanM?: number
+  columnCount?: number
 }
 
 export interface StructuralLoadResult {
@@ -23,6 +30,10 @@ export interface StructuralLoadResult {
   warnings: string[]
   uls: UlsResult
   preliminaryColumn: ColumnResult
+  wallSelfWeightKn?: number
+  wallLoadKnm2?: number
+  columnSizing?: ColumnSizingResult
+  lateralStability?: LateralStabilityResult
 }
 
 export type StructuralOccupancy =
@@ -49,6 +60,29 @@ export interface ColumnResult {
   requiredAgMm2: number
   columnDimMm: number
   concreteStrengthMpa: number
+  description: string
+}
+
+export interface ColumnSizingResult {
+  totalAxialLoadKn: number
+  columnCount: number
+  loadPerColumnKn: number
+  requiredAgMm2: number
+  columnDimMm: number
+  concreteStrengthMpa: number
+  columnSpacingM: number
+  spanM: number
+  spacingCompliant: boolean
+  description: string
+}
+
+export interface LateralStabilityResult {
+  baseShearKn: number
+  overturningMomentKnM: number
+  resistingMomentKnM: number
+  stabilityRatio: number
+  compliant: boolean
+  method: 'portal-frame' | 'shear-wall' | 'braced-frame'
   description: string
 }
 
@@ -90,6 +124,23 @@ export const ASCE_7_GAMMA_D = 1.2
 export const ASCE_7_GAMMA_L = 1.6
 export const DEFAULT_FC_MP = 35
 export const MIN_COLUMN_DIM_MM = 300
+
+// Brick properties per SANS 10400 / SABS 227 / SAZ 7 MPa Common Brick
+export const BRICK_DENSITY_KG_M3 = 1800
+export const BRICK_COMPRESSIVE_MPA = 7
+export const BRICK_WIDTH_M = 0.23
+export const BRICK_HEIGHT_M = 2.4
+export const GRAVITY_MS2 = 9.81
+
+// Span table per Skills-Architects structural systems (typical residential/commercial)
+export const COLUMN_SPACING_TABLE: Record<string, { maxSpanM: number; minColDimMm: number }> = {
+  residential: { maxSpanM: 5.0, minColDimMm: 300 },
+  office: { maxSpanM: 7.5, minColDimMm: 400 },
+  office_long: { maxSpanM: 9.0, minColDimMm: 450 },
+  retail: { maxSpanM: 6.0, minColDimMm: 350 },
+  industrial: { maxSpanM: 9.0, minColDimMm: 500 },
+  storage: { maxSpanM: 7.5, minColDimMm: 400 },
+}
 
 function computeUlsCombinations(
   deadKn: number,
@@ -173,6 +224,102 @@ function sizeColumn(factoredKn: number, fcPrime: number = DEFAULT_FC_MP): Column
   }
 }
 
+// Calculate wall self-weight for masonry walls per SANS 10400 / SABS 227
+// Common Brick 7 MPa, density 1800 kg/m³, width 0.23m, height 2.4m per floor
+function calculateWallSelfWeight(input: StructuralLoadInput): { wallSelfWeightKn: number; wallLoadKnm2: number } {
+  const wallLengthM = input.wallLengthM ?? 0
+  const wallHeightM = input.wallHeightM ?? BRICK_HEIGHT_M
+  const wallThicknessM = input.wallThicknessM ?? BRICK_WIDTH_M
+  const brickDensity = input.brickDensityKgM3 ?? BRICK_DENSITY_KG_M3
+  const wallCount = input.wallCount ?? 1
+  const floorsVal = input.floors ?? 1
+
+  if (wallLengthM <= 0) {
+    return { wallSelfWeightKn: 0, wallLoadKnm2: 0 }
+  }
+
+  const wallVolumeM3 = wallLengthM * wallHeightM * wallThicknessM * wallCount * floorsVal
+  const wallMassKg = wallVolumeM3 * brickDensity
+  const wallSelfWeightKn = Number((wallMassKg * GRAVITY_MS2 / 1000).toFixed(2))
+  const wallLoadKnm2 = wallSelfWeightKn > 0 && input.area > 0
+    ? Number((wallSelfWeightKn / input.area).toFixed(2))
+    : 0
+
+  return { wallSelfWeightKn, wallLoadKnm2 }
+}
+
+// Column sizing per Skills-Architects structural systems span tables
+function sizeColumnsPerSpanTable(
+  factoredLoadPerColumnKn: number,
+  spanM: number,
+  occupancy: StructuralOccupancy,
+  fcPrime: number = DEFAULT_FC_MP
+): ColumnSizingResult {
+  const tableEntry = COLUMN_SPACING_TABLE[occupancy] ?? COLUMN_SPACING_TABLE.residential
+  const maxSpanM = tableEntry.maxSpanM
+  const minColDimMm = tableEntry.minColDimMm
+
+  const factoredN = factoredLoadPerColumnKn * 1000
+  const agRequired = factoredN / (0.4 * fcPrime)
+  let dim = Math.ceil(Math.sqrt(agRequired) / 50) * 50
+  dim = Math.max(dim, minColDimMm, MIN_COLUMN_DIM_MM)
+
+  const spacingCompliant = spanM <= maxSpanM
+
+  return {
+    totalAxialLoadKn: factoredLoadPerColumnKn,
+    columnCount: 1,
+    loadPerColumnKn: factoredLoadPerColumnKn,
+    requiredAgMm2: Math.round(factoredN / (0.4 * fcPrime)),
+    columnDimMm: dim,
+    concreteStrengthMpa: fcPrime,
+    columnSpacingM: spanM,
+    spanM,
+    spacingCompliant,
+    description: spacingCompliant
+      ? `~${dim}x${dim} mm RC (fc'=${fcPrime.toFixed(0)} MPa) - span ${spanM}m <= ${maxSpanM}m OK`
+      : `~${dim}x${dim} mm RC (fc'=${fcPrime.toFixed(0)} MPa) - span ${spanM}m EXCEEDS ${maxSpanM}m`,
+  }
+}
+
+// Lateral stability check per SANS 10160 / SANS 10400
+function checkLateralStability(
+  totalHorizontalLoadKn: number,
+  buildingHeightM: number,
+  buildingWidthM: number,
+  buildingDepthM: number
+): LateralStabilityResult {
+  // Base shear per SANS 10160-3 (simplified for low-rise)
+  // V = C * W, where C depends on zone and building type
+  const baseShearKn = totalHorizontalLoadKn
+
+  // Overturning moment at base
+  const overturningMomentKnM = baseShearKn * (buildingHeightM / 2)
+
+  // Resisting moment from dead load (simplified)
+  // Assume rectangular building, weight distributed
+  const deadLoadPerM2 = 4.0 // typical residential dead load kN/m²
+  const buildingAreaM2 = buildingWidthM * buildingDepthM
+  const totalDeadLoadKn = deadLoadPerM2 * buildingAreaM2 * (buildingHeightM / 3.0) // 3m per floor
+  const leverArmM = Math.min(buildingWidthM, buildingDepthM) / 2
+  const resistingMomentKnM = totalDeadLoadKn * leverArmM
+
+  const stabilityRatio = resistingMomentKnM / Math.max(0.001, overturningMomentKnM)
+  const compliant = stabilityRatio >= 1.5 // SANS 10160 requires >= 1.5
+
+  return {
+    baseShearKn: Number(baseShearKn.toFixed(2)),
+    overturningMomentKnM: Number(overturningMomentKnM.toFixed(2)),
+    resistingMomentKnM: Number(resistingMomentKnM.toFixed(2)),
+    stabilityRatio: Number(stabilityRatio.toFixed(2)),
+    compliant,
+    method: 'shear-wall',
+    description: compliant
+      ? `Stability ratio ${stabilityRatio.toFixed(2)} >= 1.5 OK (shear wall)`
+      : `Stability ratio ${stabilityRatio.toFixed(2)} < 1.5 FAIL (shear wall)`,
+  }
+}
+
 export function computeGravityLoads(input: StructuralLoadInput): StructuralLoadResult {
   const warnings: string[] = []
 
@@ -230,10 +377,33 @@ export function computeGravityLoads(input: StructuralLoadInput): StructuralLoadR
     deadLoadTotalKn,
     liveLoadTotalKn,
     grandTotalKn,
-    1,
+    floorCount,
     windKn,
     seismicKn,
   )
+
+  // Calculate wall self-weight
+  const { wallSelfWeightKn, wallLoadKnm2 } = calculateWallSelfWeight(input)
+
+  // Column sizing per span table
+  let columnSizing: ColumnSizingResult | undefined
+  if (input.spanM != null && input.spanM > 0 && input.columnCount != null && input.columnCount > 0) {
+    const loadPerColumnKn = uls.factoredTotalKn / input.columnCount
+    const colSizing = sizeColumnsPerSpanTable(loadPerColumnKn, input.spanM, occupancy)
+    columnSizing = colSizing
+  }
+
+  // Lateral stability check
+  let lateralStability: LateralStabilityResult | undefined
+  if (input.wallLengthM != null && input.wallLengthM > 0 && input.wallThicknessM != null) {
+    const lateralStabilityResult = checkLateralStability(
+      input.windLoadKnm2 ?? 0,
+      (input.floors ?? 1) * BRICK_HEIGHT_M,
+      Math.sqrt(area),
+      Math.sqrt(area)
+    )
+    lateralStability = lateralStabilityResult
+  }
 
   const preliminaryColumn = sizeColumn(uls.factoredTotalKn)
 
@@ -252,7 +422,24 @@ export function computeGravityLoads(input: StructuralLoadInput): StructuralLoadR
     warnings,
     uls,
     preliminaryColumn,
+    wallSelfWeightKn,
+    wallLoadKnm2,
+    columnSizing,
+    lateralStability,
   }
 }
 
-export const DEFAULTS = { DEAD_LOADS, LIVE_LOADS, SANS_10160_GAMMA_G, SANS_10160_GAMMA_Q, ASCE_7_GAMMA_D, ASCE_7_GAMMA_L } as const
+export const DEFAULTS = {
+  DEAD_LOADS,
+  LIVE_LOADS,
+  SANS_10160_GAMMA_G,
+  SANS_10160_GAMMA_Q,
+  ASCE_7_GAMMA_D,
+  ASCE_7_GAMMA_L,
+  BRICK_DENSITY_KG_M3,
+  BRICK_COMPRESSIVE_MPA,
+  BRICK_WIDTH_M,
+  BRICK_HEIGHT_M,
+  GRAVITY_MS2,
+  COLUMN_SPACING_TABLE,
+} as const

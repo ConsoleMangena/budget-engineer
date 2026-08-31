@@ -1,179 +1,267 @@
-/**
- * C1 Resource Hub Discovery engine.
- * Builds the Resource Hub List from the Budget Engineered BOQ + rate catalogue,
- * derives the Demand Radar (deterministic regional demand), and locks the
- * SADC Market Price Index for 30 days. Local-first, no network.
- */
-import type {
-  ResourceRecord,
-  DemandRadarReport,
-  DemandRadarEntry,
-} from '@/domain/greenflag';
-import type { BoqResult } from '@/adapters/designToBoq';
-import type { Rate } from '@/types';
+import type { Rate } from "@/types";
+import type { BoqResult } from "@/adapters/designToBoq";
+import type { ResourceRecord, DemandRadarEntry, DemandRadarReport } from "@/domain/greenflag";
+
+export interface Resource {
+  id: string;
+  role: string;
+  type: 'architect' | 'qs' | 'engineer-structural' | 'engineer-electrical' | 'engineer-mechanical' | 'engineer-soils' | 'artisan-plumber' | 'artisan-electrician' | 'artisan-builder' | 'artisan-landscaper' | 'sub-contractor' | 'supplier' | 'service-provider';
+  name: string;
+  company?: string;
+  rating: number;
+  onTimeDeliveryPct: number;
+  defectRatePct: number;
+  avgDelayDays: number;
+  totalProjects: number;
+  reliabilityScore: number;
+  wipaaHealthPct: number;
+  specialization: string[];
+  locationGps?: { lat: number; lng: number };
+  locationLabel: string;
+  verifiedBadge: boolean;
+  creditScore: number;
+  availableFrom?: string;
+  servicesOffered: string[];
+}
+
+export interface ResourceFilter {
+  role?: Resource['type'];
+  locationLabel?: string;
+  maxDistanceKm?: number;
+  minRating?: number;
+  minWipaaHealth?: number;
+  specialization?: string;
+  availableBefore?: string;
+  serviceMode?: 'do-it-together' | 'do-it-for-them' | 'do-it-alone';
+}
+
+export interface DemandSignal {
+  id: string;
+  region: string;
+  material: string;
+  quantityUnits: number;
+  deadline: string;
+  projectCount?: number;
+  contractorName?: string;
+  projectType?: string;
+  reliabilityPct?: number;
+}
+
+export function filterResources(resources: Resource[], filter: ResourceFilter): Resource[] {
+  return resources.filter((r) => {
+    if (filter.role && r.type !== filter.role) return false;
+    if (filter.locationLabel && !r.locationLabel.toLowerCase().includes(filter.locationLabel.toLowerCase())) return false;
+    if (filter.minRating && r.rating < filter.minRating) return false;
+    if (filter.minWipaaHealth && r.wipaaHealthPct < filter.minWipaaHealth) return false;
+    if (filter.specialization && !r.specialization.some((s) => s.toLowerCase().includes(filter.specialization!.toLowerCase()))) return false;
+    if (filter.availableBefore && r.availableFrom && r.availableFrom > filter.availableBefore) return false;
+    return true;
+  });
+}
+
+export function rankResources(resources: Resource[]): Resource[] {
+  return [...resources].sort((a, b) => {
+    const scoreA = a.reliabilityScore * 0.3 + a.rating * 20 * 0.3 + a.wipaaHealthPct * 0.2 + (100 - a.defectRatePct) * 0.2;
+    const scoreB = b.reliabilityScore * 0.3 + b.rating * 20 * 0.3 + b.wipaaHealthPct * 0.2 + (100 - b.defectRatePct) * 0.2;
+    return scoreB - scoreA;
+  });
+}
+
+export function matchResourceToDemand(resources: Resource[], demand: DemandSignal, topK = 5): Resource[] {
+  const relevant = resources.filter((r) =>
+    r.servicesOffered.some((s) => s.toLowerCase().includes(demand.material.toLowerCase())) ||
+    r.specialization.some((s) => s.toLowerCase().includes(demand.material.toLowerCase())),
+  );
+  return rankResources(relevant).slice(0, topK);
+}
+
+export function aggregateDemand(signals: DemandSignal[]): { region: string; material: string; totalUnits: number; projectCount: number; deadline: string }[] {
+  const map = new Map<string, { region: string; material: string; totalUnits: number; projectCount: number; deadline: string }>();
+  for (const s of signals) {
+    const key = `${s.region}|${s.material}`;
+    const existing = map.get(key);
+    if (existing) {
+      existing.totalUnits += s.quantityUnits;
+      existing.projectCount += 1;
+      if (s.deadline > existing.deadline) existing.deadline = s.deadline;
+    } else {
+      map.set(key, { region: s.region, material: s.material, totalUnits: s.quantityUnits, projectCount: 1, deadline: s.deadline });
+    }
+  }
+  return [...map.values()];
+}
+
+export function greenFlagScore(resource: Resource): { score: number; tier: 'platinum' | 'gold' | 'silver' | 'bronze' } {
+  const score = Math.round(
+    resource.onTimeDeliveryPct * 0.3 +
+    (100 - resource.defectRatePct) * 0.25 +
+    resource.wipaaHealthPct * 0.25 +
+    Math.min(resource.rating * 20, 100) * 0.2,
+  );
+  const tier = score >= 90 ? 'platinum' : score >= 75 ? 'gold' : score >= 60 ? 'silver' : 'bronze';
+  return { score, tier };
+}
+
+/* --------------------------------------------------------------------------
+ * C1 Resource Hub layer
+ * ------------------------------------------------------------------------ */
+
+/** Lock window: UTC midnight of the given day + 30 days (inclusive boundary). */
+export function lockedUntilFor(now: Date): string {
+  const base = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return new Date(base + 30 * 86400000).toISOString().slice(0, 10);
+}
 
 export const RESOURCE_LOCK_DAYS = 30;
 
-export interface HubBuildOptions {
-  projectId?: string;
-  region?: string;
-  lockedDays?: number;
-  now?: Date;
+export const hashStr = (s: string): number => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  return h >>> 0;
+};
+
+/** A rate is locked while the current UTC date is on or before the boundary. */
+export function isLocked(until: string, now: Date): boolean {
+  return now.toISOString().slice(0, 10) <= until;
 }
 
-export interface HubBuildResult {
-  resources: ResourceRecord[];
-  demandRadar: DemandRadarReport;
-  lockedUntil: string;
-}
-
-const TRADE_BY_MATERIAL: Array<[RegExp, string]> = [
-  [/cement|concrete/i, 'Cement & Concrete'],
-  [/brick|block|masonry/i, 'Brick & Block'],
-  [/steel|rebar|reinforc/i, 'Steel & Reinforcement'],
-  [/timber|roof|truss/i, 'Timber & Roofing'],
-  [/paint|plaster|tile/i, 'Finishes'],
-  [/window|glass/i, 'Fenestration'],
-  [/door/i, 'Doors & Ironmongery'],
-  [/solar|electrical/i, 'Electrical & Solar'],
-  [/plumb|pipe|sanitary/i, 'Plumbing & Sanitary'],
+const TRADE_KEYWORDS: Array<{ trade: string; keywords: string[] }> = [
+  { trade: 'Cement & Concrete', keywords: ['cement', 'concrete', 'mortar', 'screed', 'render'] },
+  { trade: 'Brick & Block', keywords: ['brick', 'block', 'masonry', 'clay'] },
+  { trade: 'Steel & Reinforcement', keywords: ['rebar', 'steel', 'reinforcement', 'mesh'] },
+  { trade: 'Timber & Joinery', keywords: ['timber', 'wood', 'joinery', 'formwork', 'door'] },
+  { trade: 'Roofing & Cladding', keywords: ['roof', 'ibr', 'sheeting', 'cladding', 'truss', 'gutter', 'downpipe'] },
+  { trade: 'Plumbing & Sanitary', keywords: ['plumb', 'pvc', 'u-pvc', 'drain', 'waste', 'sanitary', 'tap', 'wc', 'basin', 'shower'] },
+  { trade: 'Electrical & Lighting', keywords: ['electrical', 'cable', 'conduit', 'switch', 'socket', 'light', 'db board', 'meter'] },
+  { trade: 'Paints & Finishes', keywords: ['paint', 'emulsion', 'plaster', 'skimming', 'varnish', 'stain'] },
+  { trade: 'Aggregates & Soil', keywords: ['sand', 'aggregate', 'stone', 'gravel', 'fill', 'soil', 'quarry'] },
+  { trade: 'Glass & Glazing', keywords: ['glass', 'glazing', 'aluminium', 'aluminum'] },
+  { trade: 'Insulation & Membranes', keywords: ['insulation', 'membrane', 'dpc', 'damp', 'waterproof', 'geofabric'] },
+  { trade: 'General Materials', keywords: [] },
 ];
 
 export function tradeForDescription(description: string): string {
-  for (const [pattern, trade] of TRADE_BY_MATERIAL) {
-    if (pattern.test(description)) return trade;
+  const lower = description.toLowerCase();
+  for (const { trade, keywords } of TRADE_KEYWORDS) {
+    if (keywords.length === 0) return trade;
+    if (keywords.some((k) => lower.includes(k))) return trade;
   }
   return 'General Materials';
 }
 
-/** Deterministic FNV-1a hash (same algorithm as priceIndex.ts) */
-export function hashStr(input: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
+export interface ResourceHub {
+  resources: ResourceRecord[];
+  lockedUntil: string;
 }
 
 /**
- * Build the C1 hub: resource records derived from the BOQ material lines +
- * rate catalogue, a deterministic demand radar, and the 30-day market lock.
+ * Builds the C1 resource hub: BOQ line items first (unverified, 'rag' source),
+ * then any rate-catalogue rows appended as verified 'market-index' resources.
+ * Every resource shares one 30-day lock window.
  */
 export function buildResourceHub(
   boq: BoqResult | null,
   rates: Rate[],
-  opts: HubBuildOptions = {},
-): HubBuildResult {
+  opts: { projectId: string; now?: Date; region?: string },
+): ResourceHub {
   const now = opts.now ?? new Date();
-  const lockedUntil = new Date(now.getTime() + (opts.lockedDays ?? RESOURCE_LOCK_DAYS) * 86400000)
-    .toISOString()
-    .slice(0, 10);
+  const createdAt = now.toISOString();
+  const lockedUntil = lockedUntilFor(now);
   const region = opts.region ?? 'zimbabwe';
-  const projectId = opts.projectId ?? 'local';
   const resources: ResourceRecord[] = [];
 
-  if (boq) {
-    boq.items.forEach((item, idx) => {
-      const desc = item.description ?? `Material ${idx + 1}`;
-      const rateCents = Math.round(item.rate * 100);
-      if (!desc || rateCents <= 0) return;
+  if (boq && boq.items) {
+    for (const item of boq.items) {
       resources.push({
-        id: `res-${projectId}-${idx}`,
-        projectId,
-        name: desc,
+        id: `res-${opts.projectId}-boq-${item.id}`,
+        projectId: opts.projectId,
+        name: item.description,
         category: 'material',
-        trade: tradeForDescription(desc),
-        verified: (hashStr(`${projectId}:${desc}`) % 10) < 7,
-        rating: 4.0 + (hashStr(desc) % 10) / 10,
-        distanceKm: 2 + (hashStr(desc) % 30),
-        baseRateCents: rateCents,
-        unit: item.unit ?? 'each',
+        trade: tradeForDescription(item.description),
+        verified: false,
+        rating: 0,
+        distanceKm: 0,
+        baseRateCents: Math.round(item.rate * 100),
+        unit: item.unit,
         region,
         source: 'rag',
         lockedUntil,
-        createdAt: now.toISOString(),
+        createdAt,
       });
-    });
+    }
   }
 
-  for (const rate of rates.slice(0, 12)) {
+  for (const r of rates) {
     resources.push({
-      id: `res-${projectId}-rate-${rate.id}`,
-      projectId,
-      name: rate.description,
+      id: `res-${opts.projectId}-rate-${r.id}`,
+      projectId: opts.projectId,
+      name: r.description,
       category: 'material',
-      trade: tradeForDescription(rate.description),
+      trade: tradeForDescription(r.description),
       verified: true,
-      rating: 4.5,
-      distanceKm: 5 + (hashStr(rate.id) % 25),
-      baseRateCents: rate.baseRateCents,
-      unit: rate.unit,
-      region: rate.region ?? region,
+      rating: 4.4,
+      distanceKm: 0,
+      baseRateCents: r.baseRateCents,
+      unit: r.unit,
+      region: r.region,
       source: 'market-index',
       lockedUntil,
-      createdAt: now.toISOString(),
+      createdAt,
     });
   }
 
-  const demandRadar = buildDemandRadar(now, region, lockedUntil);
-  return { resources, demandRadar, lockedUntil };
+  return { resources, lockedUntil };
 }
+
+export interface DemandMaterial {
+  material: string;
+  unit: string;
+  baseDemand: number;
+  baseProjects: number;
+  indexPriceCents: number;
+}
+
+const DEMAND_MATERIALS: DemandMaterial[] = [
+  { material: 'Bricks', unit: 'thousand', baseDemand: 500000, baseProjects: 12, indexPriceCents: 129000 },
+  { material: 'Cement 50kg', unit: 'bag', baseDemand: 180000, baseProjects: 14, indexPriceCents: 850 },
+  { material: 'Rebar 12mm', unit: 'tonne', baseDemand: 24000, baseProjects: 9, indexPriceCents: 95000 },
+  { material: 'River Sand', unit: 'tonne', baseDemand: 90000, baseProjects: 11, indexPriceCents: 28000 },
+  { material: 'Aggregates', unit: 'tonne', baseDemand: 110000, baseProjects: 10, indexPriceCents: 32000 },
+  { material: 'Paint 20L', unit: 'litre', baseDemand: 60000, baseProjects: 10, indexPriceCents: 4500 },
+  { material: 'Roofing Sheets', unit: 'sheet', baseDemand: 75000, baseProjects: 8, indexPriceCents: 1200 },
+  { material: 'Timber', unit: 'm3', baseDemand: 30000, baseProjects: 7, indexPriceCents: 155000 },
+];
+
+const QUARTER_SEASONALITY: Record<number, number> = { 1: 0.9, 2: 1.0, 3: 1.15, 4: 1.05 };
 
 /**
- * Deterministic Demand Radar: regional forward demand by material for the
- * current + next quarter. Locked prices match the market index for 30 days.
+ * Emits the deterministic demand radar for the four quarters following the
+ * current one. Seasonality scales each material's base demand/projects per
+ * quarter. Never includes identity, location or budget fields.
  */
-export function buildDemandRadar(now: Date, region: string, lockedUntil?: string): DemandRadarReport {
-  const quarter = `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`;
-  const nextQuarter = `Q${((Math.floor(now.getMonth() / 3) + 1) % 4) + 1} ${now.getFullYear() + (Math.floor(now.getMonth() / 3) === 3 ? 1 : 0)}`;
-  const base = hashStr(`${region}:${quarter}`);
-  const entries: DemandRadarEntry[] = [
-    {
-      region: region === 'zimbabwe' ? 'Gweru Region' : 'Gauteng',
-      quarter,
-      material: 'Bricks',
-      unit: 'units',
-      demandUnits: 400000 + (base % 200000),
-      activeProjects: 10 + (base % 5),
-      indexPriceCents: 25 + (base % 5),
-    },
-    {
-      region: region === 'zimbabwe' ? 'Gweru Region' : 'Gauteng',
-      quarter: nextQuarter,
-      material: 'Bricks',
-      unit: 'units',
-      demandUnits: 500000 + (base % 100000),
-      activeProjects: 12 + (base % 4),
-      indexPriceCents: 25 + (base % 5),
-    },
-    {
-      region: region === 'zimbabwe' ? 'Harare Metro' : 'Cape Town',
-      quarter,
-      material: 'Cement 50kg',
-      unit: 'bags',
-      demandUnits: 8000 + (base % 4000),
-      activeProjects: 15 + (base % 6),
-      indexPriceCents: 1850 + (base % 100),
-    },
-    {
-      region: region === 'zimbabwe' ? 'Bulawayo' : 'Durban',
-      quarter,
-      material: 'Roof Sheets',
-      unit: 'm2',
-      demandUnits: 15000 + (base % 5000),
-      activeProjects: 9 + (base % 3),
-      indexPriceCents: 1200 + (base % 60),
-    },
-  ];
-  return { entries, generatedAt: now.toISOString(), lockedUntil: lockedUntil ?? '' };
-}
+export function buildDemandRadar(now: Date, region: string): DemandRadarReport {
+  const currentQuarter = Math.floor(now.getUTCMonth() / 3) + 1;
+  const entries: DemandRadarEntry[] = [];
 
-/** 30-day lock helpers used by the stage components. */
-export function lockedUntilFor(now: Date = new Date()): string {
-  return new Date(now.getTime() + RESOURCE_LOCK_DAYS * 86400000).toISOString().slice(0, 10);
-}
+  for (const m of DEMAND_MATERIALS) {
+    for (let offset = 1; offset <= 4; offset += 1) {
+      const seq = currentQuarter + offset;
+      const year = now.getUTCFullYear() + Math.floor((seq - 1) / 4);
+      const quarterNum = ((seq - 1) % 4) + 1;
+      const multiplier = QUARTER_SEASONALITY[quarterNum] ?? 1;
+      entries.push({
+        region,
+        quarter: `Q${quarterNum} ${year}`,
+        material: m.material,
+        unit: m.unit,
+        demandUnits: Math.round(m.baseDemand * multiplier),
+        activeProjects: Math.round(m.baseProjects * multiplier),
+        indexPriceCents: m.indexPriceCents,
+      });
+    }
+  }
 
-export function isLocked(lockedUntil: string, now: Date = new Date()): boolean {
-  return now.toISOString().slice(0, 10) <= lockedUntil;
+  return { entries, generatedAt: now.toISOString(), lockedUntil: lockedUntilFor(now) };
 }

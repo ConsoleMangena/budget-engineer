@@ -14,7 +14,7 @@ export function sourceTypeFor(docId: string): string {
   if (id.includes('saz') || id.includes('standard')) return 'standard'
   if (id.includes('catalogue') || id.includes('catalog')) return 'catalogue'
   if (id.includes('typolog') || id.includes('guide')) return 'guide'
-  if (id.includes('by-laws') || id.includes('bylaws') || id.includes('legislation') || id.includes('si-56')) return 'statute'
+  if (id.includes('by-law') || id.includes('by-laws') || id.includes('bylaws') || id.includes('legislation') || id.includes('si-56') || id.includes('code') || id.includes('statute')) return 'statute'
   return 'document'
 }
 

@@ -23,7 +23,7 @@ import {
   rebateForTier,
   rebateForContract,
   autoVerifyProduct,
-  type CertificationInput,
+  type CertifyEntityInput,
   type CredentialSet,
 } from '@/engine/greenflag/certification';
 import type { ScoreTier, RoleCertRequirement } from '@/domain/greenflag';
@@ -57,7 +57,7 @@ const KYC_STEPS = [
 /*  Sub-components                                                           */
 /* -------------------------------------------------------------------------- */
 
-function PublicScorecardCard({ input }: { input: CertificationInput }) {
+function PublicScorecardCard({ input }: { input: CertifyEntityInput }) {
   const r = certifyEntity(input);
   const sc = r.publicScorecard;
 
@@ -326,7 +326,7 @@ export function C3GreenFlagCertStage() {
     setChecks((c) => ({ ...c, [id]: !c[id] }));
   }, []);
 
-  const previewInput: CertificationInput = useMemo(
+  const previewInput: CertifyEntityInput = useMemo(
     () => ({
       projectId: projectId ?? 'preview',
       entityId: `preview-${kind}`,

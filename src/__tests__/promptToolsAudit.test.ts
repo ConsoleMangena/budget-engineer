@@ -18,11 +18,12 @@ import {
   TOOLS,
   READ_TOOLS,
   WRITE_TOOLS,
+  DECISION_TOOLS,
   AGENT_TOOL_SCOPES,
-  parseToolArgs,
-  isValidToolArgs,
   canCallTool,
   assertAgentToolScope,
+  isValidToolArgs,
+  parseToolArgs,
 } from '@/engine/tools/definitions'
 import { TOOL_SCHEMAS as SCHEMA_TOOL_SCHEMAS } from '@/ai/schema'
 
@@ -117,10 +118,11 @@ describe('PHASE 1 audit — brief + compliance prompts carry the grounding', () 
 })
 
 describe('PHASE 1 audit — tool schemas (LLM tools layer)', () => {
-  it('registers all twelve tools with read/write/decision split', () => {
-    expect(TOOLS).toHaveLength(12)
-    expect(READ_TOOLS).toEqual(['query_blaws', 'query_saz', 'query_ziqs', 'query_si56', 'query_market_index', 'search_codes'])
-    expect(WRITE_TOOLS).toEqual(['calculate_brick_quantity', 'calculate_concrete_volume', 'calculate_tco', 'p4p_calculator', 'wipaa_calculator'])
+  it('registers all tools with read/write/decision split', () => {
+    expect(TOOLS).toHaveLength(21)
+    expect(READ_TOOLS).toEqual(['query_blaws', 'query_saz', 'query_ziqs', 'query_si56', 'query_market_index', 'search_codes', 'resource_hub_search', 'contractor_match'])
+    expect(WRITE_TOOLS).toEqual(['calculate_brick_quantity', 'calculate_concrete_volume', 'calculate_tco', 'p4p_calculator', 'wipaa_calculator', 'tco_compare', 'vetting_scorecard', 'cost_baseline_build', 'value_engineering', 'critical_path_build', 'change_order_create', 'wipaa_snapshot'])
+    expect(DECISION_TOOLS).toEqual(['gono_go_decision'])
   })
   it('strict schemas reject unknown keys (string injection guard)', () => {
     expect(() => parseToolArgs('query_blaws', { query: 'party wall', chapter: '4', injected: 'DROP TABLE' })).toThrow()

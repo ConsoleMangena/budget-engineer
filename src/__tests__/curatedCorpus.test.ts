@@ -26,13 +26,16 @@ describe('curated in-app corpus', () => {
     expect(TYPOLOGIES_GUIDE_DOC.sections.length).toBeGreaterThan(0)
   })
 
-  it('buildDefaultRagIndex indexes five documents', () => {
+  it('buildDefaultRagIndex indexes the authority docs plus the skill corpus', () => {
     const index = buildDefaultRagIndex()
     expect(index.hasDocument('by-laws-1977')).toBe(true)
     expect(index.hasDocument('si-56-2025')).toBe(true)
     expect(index.hasDocument('saz-catalogue')).toBe(true)
     expect(index.hasDocument('building-typologies-design-guide')).toBe(true)
     expect(index.hasDocument('ziqs-smm')).toBe(true)
+    expect(index.hasDocument('cfd-skill')).toBe(true)
+    expect(index.hasDocument('civic-engagement-skill')).toBe(true)
+    expect(index.hasDocument('urban-forestry-skill')).toBe(true)
     expect(index.size).toBeGreaterThan(0)
   })
 

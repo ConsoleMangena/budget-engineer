@@ -71,8 +71,8 @@ export function roomGroupFor(name: string): OfficeRoomGroup | null {
   return OFFICE_CLASSIFIER(name) as OfficeRoomGroup | null
 }
 
-/** Mirror of plan-intelligence shared-boundary semantics (eps 0.01). */
-export function sharedBoundaryLength(a: AdjacencyRoom, b: AdjacencyRoom, eps = 0.01): number {
+/** Mirror of plan-intelligence shared-boundary semantics (eps 0.15 for snap05 tolerance). */
+export function sharedBoundaryLength(a: AdjacencyRoom, b: AdjacencyRoom, eps = 0.15): number {
   // a is left of b — vertical shared edge
   if (Math.abs(a.x + a.width - b.x) < eps) {
     const overlapStart = Math.max(a.y, b.y)
@@ -100,7 +100,7 @@ export function sharedBoundaryLength(a: AdjacencyRoom, b: AdjacencyRoom, eps = 0
   return 0
 }
 
-export function rectsTouch(a: AdjacencyRoom, b: AdjacencyRoom, minOverlap = 0.5, eps = 0.01): boolean {
+export function rectsTouch(a: AdjacencyRoom, b: AdjacencyRoom, minOverlap = 0.5, eps = 0.15): boolean {
   return sharedBoundaryLength(a, b, eps) >= minOverlap
 }
 

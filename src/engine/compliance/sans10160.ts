@@ -119,6 +119,11 @@ export function imposedLoadKpa(occ: StructuralOccupancy): number {
     roof: 1.0,
     educational: 3.0,
     institutional: 3.0,
+    hospital: 2.0,
+    hotel: 1.5,
+    library: 5.0,
+    assembly: 5.0,
+    parking: 2.5,
   }
   return map[occ] ?? 1.5
 }

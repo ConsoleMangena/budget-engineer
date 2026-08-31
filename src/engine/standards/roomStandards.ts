@@ -67,7 +67,7 @@ export const ROOM_STANDARDS: Record<string, RoomStandard> = {
   'Study / Flex': { name: 'Study / Flex', zone: 'private', isWetCore: false, minWidth: 2.5, minDepth: 2.5 },
   'Playroom': { name: 'Playroom', zone: 'private', isWetCore: false, minWidth: 3.0, minDepth: 3.5 },
   'Verandah': { name: 'Verandah', zone: 'public', isWetCore: false, minWidth: 1.8, minDepth: 3.0 },
-  'Veranda': { name: 'Veranda', zone: 'public', isWetCore: false, minWidth: 1.5, minDepth: 2.0 },
+   'Veranda': { name: 'Veranda', zone: 'public', isWetCore: false, minWidth: 1.8, minDepth: 3.0 },
   'Porch': { name: 'Porch', zone: 'public', isWetCore: false, minWidth: 1.5, minDepth: 2.0 },
   'Garage': { name: 'Garage', zone: 'service', isWetCore: false, minWidth: 3.0, minDepth: 5.5 },
 
@@ -114,7 +114,7 @@ export const ROOM_STANDARDS: Record<string, RoomStandard> = {
   'Private Office': { name: 'Private Office', zone: 'private', isWetCore: false, minWidth: 3.0, minDepth: 3.5 },
   'Meeting Room': { name: 'Meeting Room', zone: 'public', isWetCore: false, minWidth: 4.0, minDepth: 4.5 },
   'Office': { name: 'Office', zone: 'private', isWetCore: false, minWidth: 2.5, minDepth: 3.0, minAreaM2: 8, minCeilingHeight: 2.4, naturalLightM2: 0.8, ventilation: true },
-  'Kitchenette': { name: 'Kitchenette', zone: 'service', isWetCore: true, minWidth: 2.0, minDepth: 2.0 },
+   'Kitchenette': { name: 'Kitchenette', zone: 'service', isWetCore: true, minWidth: 2.1, minDepth: 2.4 },
 
   // ── Retail / Shop ──
   'Sales Floor': { name: 'Sales Floor', zone: 'public', isWetCore: false, minWidth: 5.0, minDepth: 8.0 },

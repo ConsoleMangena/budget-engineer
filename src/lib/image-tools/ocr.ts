@@ -29,9 +29,8 @@ export async function extractTextFromImage(
   const Tesseract = await import('tesseract.js')
   const language = options?.language ?? 'eng'
 
-  const imageSource = source instanceof Blob || source instanceof File
-    ? source
-    : source
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tesseract.js accepts string|Blob|File at runtime
+  const imageSource: any = source
 
   const { data } = await Tesseract.recognize(imageSource, language, {
     logger: (m: { status: string; progress: number }) => {
@@ -44,12 +43,12 @@ export async function extractTextFromImage(
   return {
     text: data.text.trim(),
     confidence: Math.round(data.confidence * 10) / 10,
-    words: data.words.map((w) => ({
+    words: data.words.map((w: { text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }) => ({
       text: w.text,
       confidence: Math.round(w.confidence * 10) / 10,
       bbox: { x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 },
     })),
-    lines: data.lines.map((l) => ({
+    lines: data.lines.map((l: { text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }) => ({
       text: l.text.trim(),
       confidence: Math.round(l.confidence * 10) / 10,
       bbox: { x0: l.bbox.x0, y0: l.bbox.y0, x1: l.bbox.x1, y1: l.bbox.y1 },
