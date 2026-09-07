@@ -4,6 +4,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useDisciplineStore } from '@/stores/disciplineStore';
 import { ThemeToggleSimple } from './ThemeToggle';
 import { OfflineIndicator } from './OfflineIndicator';
+import { SyncIndicator } from './SyncIndicator';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Menu, Save, Sparkles } from 'lucide-react';
@@ -91,6 +92,7 @@ export function CommandBar() {
       </div>
       <MobileStageRail />
       <OfflineIndicator />
+      <SyncIndicator />
     </header>
   );
 }

@@ -60,10 +60,10 @@ function recordCall(
   respond: (path: string, init?: RequestInit) => unknown,
 ): CloudApiClient {
   return {
-    request: async (path: string, init: RequestInit = {}) => {
+    request: async <T>(path: string, init: RequestInit = {}) => {
       const out = respond(path, init);
       records.push({ path, init });
-      return out;
+      return out as T;
     },
   };
 }
@@ -139,7 +139,7 @@ describe('cloudSync actions', () => {
   }
 
   it('POSTs a project when no remote id exists', async () => {
-    const { client, calls } = fakeClient((path, init) => {
+    const { client, calls } = fakeClient((_path, init) => {
       if (init?.method === 'POST') return { id: 42, title: 'Avondale House' };
       return { count: 1, next: null, previous: null, results: [{ id: 42 }] };
     });
