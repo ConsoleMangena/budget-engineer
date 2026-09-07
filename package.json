@@ -37,6 +37,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
+    "@supabase/supabase-js": "^2.115.0",
     "@techstark/opencv-js": "^5.0.0-release.1",
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.0",
