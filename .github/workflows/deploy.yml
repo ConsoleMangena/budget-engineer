@@ -38,6 +38,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Production build
         run: npm run build:only
+        working-directory: frontend
       - name: Debug build output
         shell: bash
         run: |
@@ -175,6 +176,7 @@ jobs:
       - name: Install Playwright browsers
         if: steps.preflight.outputs.reason == 'reachable'
         run: npx playwright install --with-deps chromium
+        working-directory: frontend
 
       - name: Run smoke tests
         id: smoke
@@ -182,6 +184,7 @@ jobs:
         env:
           BASE_URL: ${{ steps.url.outputs.url }}
         run: npm run test:smoke
+        working-directory: frontend
 
       - name: Report smoke test results
         if: always()

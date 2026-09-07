@@ -26,6 +26,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: TypeScript strict check
         run: npm run typecheck
+        working-directory: frontend
 
   # ──────────────────────────────────────────────
   # Parallel lanes — run after typecheck succeeds
@@ -42,6 +43,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: ESLint
         run: npm run lint
+        working-directory: frontend
 
   shard-1:
     needs: typecheck
@@ -55,6 +57,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Fast-path tests — shard 1/3
         run: npm run test:shard1
+        working-directory: frontend
 
   shard-2:
     needs: typecheck
@@ -68,6 +71,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Fast-path tests — shard 2/3
         run: npm run test:shard2
+        working-directory: frontend
 
   shard-3:
     needs: typecheck
@@ -81,6 +85,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Fast-path tests — shard 3/3
         run: npm run test:shard3
+        working-directory: frontend
 
   integration:
     needs: typecheck
@@ -94,6 +99,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Heavy page-mount integration tests
         run: npm run test:integration
+        working-directory: frontend
 
   build:
     needs: typecheck
@@ -107,6 +113,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Production build (no typecheck — already passed)
         run: npm run build:only
+        working-directory: frontend
 
   # ──────────────────────────────────────────────
   # Release gate — aggregate check for branch protection
