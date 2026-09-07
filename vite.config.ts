@@ -79,6 +79,14 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@mlc-ai/web-llm'],
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     chunkSizeWarningLimit: 512,
     rollupOptions: {

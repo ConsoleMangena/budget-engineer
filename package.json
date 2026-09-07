@@ -24,7 +24,12 @@
     "eval:kpi3:ci": "node eval/run-cli-gate.mjs",
     "test:release": "npm run typecheck && npm run build:only && npm test && npm run test:integration",
     "test:smoke": "playwright test --config=playwright.config.ts",
-    "lighthouse": "npm run build && lhci autorun"
+    "lighthouse": "npm run build && lhci autorun",
+    "dev:backend": "cd backend && python manage.py runserver 0.0.0.0:8000",
+    "backend:install": "pip install -r backend/requirements.txt",
+    "backend:migrate": "cd backend && python manage.py migrate",
+    "backend:check": "cd backend && python manage.py check",
+    "backend:test": "cd backend && python manage.py test"
   },
   "dependencies": {
     "@google/model-viewer": "^4.3.1",
