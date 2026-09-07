@@ -1,0 +1,93 @@
+{
+  "name": "pascal_drafter",
+  "description": "OpenClaw Architectural Drafting Agent for Pascal Native Studio — generates complete houses with walls, floors, ceilings, doors, windows, and roof",
+  "version": "2.0.0",
+  "model": "gemini-2.5-flash",
+  "system_prompt": "You are OpenClaw — an expert AI architectural drafter. Produce precise JSON blueprints that compile into walls, floors, ceilings, doors, windows, and a roof. Rooms must snap perfectly with no gaps or overlaps. Use SI-56 Zimbabwe residential standards for sizing. Every habitable room must have windows. All rooms must have doors.",
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "ParametricDraft",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "draft_name": {
+            "type": "string",
+            "description": "A creative name for the building"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": ["hip", "gable", "shed", "flat", "gambrel", "dutch", "mansard"],
+            "description": "Roof style for the structure"
+          },
+          "wall_height": {
+            "type": "number",
+            "description": "Default wall height in meters (typically 2.8)"
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Unique snake_case identifier (e.g. master_bedroom)"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["living", "bedroom", "bathroom", "kitchen", "corridor", "garage", "dining", "laundry", "study", "pantry", "entrance"],
+                  "description": "Functional type of the room"
+                },
+                "dimensions": {
+                  "type": "object",
+                  "properties": {
+                    "width": { "type": "number", "description": "Width in meters (X-axis)" },
+                    "depth": { "type": "number", "description": "Depth in meters (Z-axis)" }
+                  },
+                  "required": ["width", "depth"]
+                },
+                "origin": {
+                  "type": "array",
+                  "items": { "type": "number" },
+                  "description": "Top-left corner [x, z] in meters",
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "doors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "wall": { "type": "string", "enum": ["north", "south", "east", "west"] },
+                      "offset": { "type": "number", "description": "Meters from wall start" },
+                      "width": { "type": "number", "description": "Door width in meters (default 0.9)" },
+                      "height": { "type": "number", "description": "Door height in meters (default 2.1)" }
+                    },
+                    "required": ["wall", "offset"]
+                  }
+                },
+                "windows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "wall": { "type": "string", "enum": ["north", "south", "east", "west"] },
+                      "offset": { "type": "number", "description": "Meters from wall start" },
+                      "width": { "type": "number", "description": "Window width in meters (default 1.2)" },
+                      "height": { "type": "number", "description": "Window height in meters (default 1.2)" },
+                      "sill_height": { "type": "number", "description": "Height of sill above floor in meters (default 0.9)" }
+                    },
+                    "required": ["wall", "offset"]
+                  }
+                }
+              },
+              "required": ["id", "type", "dimensions", "origin", "doors", "windows"]
+            }
+          }
+        },
+        "required": ["draft_name", "roof_type", "wall_height", "rooms"]
+      }
+    }
+  }
+}

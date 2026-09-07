@@ -1,0 +1,44 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+backend/venv
+backend/.venv
+
+# Node
+frontend/node_modules
+frontend/dist
+frontend/.tanstack
+
+# Environment files (injected at runtime, not baked into images)
+.env
+backend/.env
+frontend/.env
+*.env.local
+*.env.*.local
+
+# IDE / Editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.yml
+Dockerfile.*
+
+# Misc
+*.md
+*.log
+chroma_db
+frontend/fix_*.py
+.claude

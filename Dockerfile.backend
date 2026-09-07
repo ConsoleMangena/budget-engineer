@@ -1,0 +1,38 @@
+# ── Backend: Python 3.12 + Django + Gunicorn ──────────────────────────
+FROM python:3.12-slim AS backend
+
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# System dependencies for psycopg2, pdf2image (poppler), and general build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    poppler-utils \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies first (layer caching)
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir gunicorn && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy backend source code
+COPY backend/ .
+
+# Collect static files (uses a dummy SECRET_KEY for the build step only)
+RUN SECRET_KEY=build-placeholder python manage.py collectstatic --noinput 2>/dev/null || true
+
+EXPOSE 8000
+
+CMD ["gunicorn", "config.wsgi:application", \
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "3", \
+     "--timeout", "300", \
+     "--graceful-timeout", "30", \
+     "--keep-alive", "5", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-"]
