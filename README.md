@@ -473,6 +473,44 @@ SPA fallback is configured via `vercel.json` and `public/_redirects` for Netlify
 
 ---
 
+## Optional Backend & Cloud Sync (Africa ConTech Hub)
+
+The frontend is fully local-first: everything works offline with no server. An optional Django
+backend (co-located in `backend/`) mirrors projects and BOQ to the Africa ConTech Hub API so
+teams can share data across devices.
+
+### Local run
+
+```bash
+# 1. Backend env
+cp backend/.env.example backend/.env   # then fill SECRET_KEY, Supabase, Gemini keys
+
+# 2. Backend (terminal A)
+npm run backend:install                # pip install -r backend/requirements.txt (or use a venv)
+npm run backend:migrate
+npm run dev:backend                    # Django on http://localhost:8000
+
+# 3. Frontend (terminal B)
+npm install
+npm run dev                            # Vite on http://localhost:5173 (proxies /api to :8000)
+```
+
+### Signing in
+
+The optional sync uses Supabase auth (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` in the root
+`.env`). New sign-ins are created as `BUILDER` but must be **approved by an admin** before the
+API accepts requests — approve via the Django admin (`/admin/`, `apps.authentication.Profile`)
+or the admin dashboard. Until approved, the sync indicator shows "Approval pending".
+
+### Sync scope (v1)
+
+- Push local project metadata → `POST/PATCH /api/v1/projects/`
+- Push budget as preliminary BOQ lines → `POST /api/v1/boq-building-items/`
+- Pull remote project list → `GET /api/v1/projects/`
+- Last-write-wins; no remote line deletion; no field-level conflict merge.
+
+---
+
 ## CI Pipeline
 
 Two GitHub Actions workflows run in parallel:
