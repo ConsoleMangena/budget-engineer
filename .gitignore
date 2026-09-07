@@ -1,15 +1,25 @@
+# Hoisted dependencies (npm workspaces) + frontend build/tooling output
 node_modules
 dist
-Sources
-corpus/*.json
 build
 .cache
 .vite
 coverage
-.env
-.env.local
-.DS_Store
 .lighthouseci
 lighthouse-report
 
+# Backend (co-located in backend/)
+backend/__pycache__
+backend/*.pyc
+backend/db.sqlite3
+backend/.env
+backend/media/
+backend/staticfiles/
+
+# Monorepo shared
+.env
+.env.local
+.DS_Store
 .vercel
+Sources
+corpus/*.json
