@@ -47,10 +47,6 @@ export function clone<T>(obj: T): T {
 
 // ─── Money helpers (from WS2) ────────────────────────────────────────
 
-export function cents(value: number): number {
-  return Math.round(value * 100);
-}
-
 export function fromCents(value: number): number {
   return value / 100;
 }
@@ -63,6 +59,4 @@ export function formatCurrency(valueInCents: number, currency = 'USD', locale = 
   }).format(fromCents(valueInCents));
 }
 
-export function multiplyMoney(unitRateCents: number, quantity: number): number {
-  return Math.round(unitRateCents * quantity);
-}
+
