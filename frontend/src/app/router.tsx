@@ -52,6 +52,10 @@ const ContractorDashboard = lazy(() => import('@/pages/ecosystem/ContractorDashb
 const SupplierDashboard = lazy(() => import('@/pages/ecosystem/SupplierDashboard'));
 const BulkProcurementDashboard = lazy(() => import('@/pages/ecosystem/BulkProcurementDashboard'));
 const BimPage = lazy(() => import('@/pages/BimPage'));
+const LoginPage = lazy(() => import('@/pages/LoginPage').then((m) => ({ default: m.LoginPage })));
+const RegisterPage = lazy(() =>
+  import('@/pages/RegisterPage').then((m) => ({ default: m.RegisterPage })),
+);
 
 function SafeRoute({ children }: { children: React.ReactNode }) {
   return <ErrorBoundary><Suspense fallback={<PageLoader />}>{children}</Suspense></ErrorBoundary>;
@@ -150,6 +154,14 @@ const router = createBrowserRouter([
       {
         path: '/feedback',
         element: <SafeRoute><FeedbackPage /></SafeRoute>,
+      },
+      {
+        path: '/login',
+        element: <SafeRoute><LoginPage /></SafeRoute>,
+      },
+      {
+        path: '/register',
+        element: <SafeRoute><RegisterPage /></SafeRoute>,
       },
       {
         path: '/project/:id/studio/interior',

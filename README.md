@@ -217,17 +217,20 @@ Plus **A1 presentation sheet** with title block. Export to PDF or PNG.
 ```bash
 git clone https://github.com/securequalitybuilders-art/budget-engineer
 cd budget-engineer
-npm install
-npm run dev
+npm install              # installs dependencies for the frontend/ workspace (hoisted to root node_modules)
+npm run frontend:dev     # Vite dev server from frontend/ (alias for npm run dev --workspace=frontend)
 ```
 
 Open [http://localhost:5173](http://localhost:5173).
 
 For production build + preview:
 ```bash
-npm run build
-npm run preview
+npm run frontend:build        # typecheck + production build (from frontend/)
+npm run preview --workspace=frontend
 ```
+
+> Commands run via the root workspace aliases (`frontend:*`) or directly with
+> `npm run <script> --workspace=frontend`. All frontend sources live in `frontend/`.
 
 ---
 
