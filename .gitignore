@@ -1,25 +1,87 @@
-# Hoisted dependencies (npm workspaces) + frontend build/tooling output
-node_modules
-dist
-build
-.cache
-.vite
-coverage
-.lighthouseci
-lighthouse-report
+# Dependencies
+node_modules/
+**/node_modules/
 
-# Backend (co-located in backend/)
-backend/__pycache__
-backend/*.pyc
+# Frontend builds & caches
+dist/
+**/dist/
+build/
+**/build/
+.cache/
+.vite/
+**/.vite/
+coverage/
+**/coverage/
+.nyc_output/
+*.tsbuildinfo
+.eslintcache
+
+# Testing & CI reports
+.lighthouseci/
+lighthouse-report/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Backend (Python / Django)
+backend/__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+**/venv/
+**/.venv/
+**/env/
 backend/db.sqlite3
-backend/.env
+backend/db.sqlite3-journal
+*.sqlite3
 backend/media/
 backend/staticfiles/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs & temp files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+*.temp
+
+# Secrets and environment files
+.env
+.env.*
+.env.local
+!.env.example
+*.pem
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*~
+*.swp
+*.swo
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.gemini/
+.cursor/
 
 # Monorepo shared
-.env
-.env.local
-.DS_Store
 .vercel
 Sources
 corpus/*.json
